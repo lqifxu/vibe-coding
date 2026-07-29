@@ -9,6 +9,3 @@ frontend/dist/
 _gen*.py
 _list.txt
 backend/ffmpeg.path
-
-_*.py
-!frontend/
