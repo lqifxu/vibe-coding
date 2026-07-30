@@ -26,7 +26,7 @@
 | 无字幕 | 友好报错；**不含 ASR** |
 | LLM | OpenAI 兼容（默认 DeepSeek：`LLM_BASE_URL` + `LLM_API_KEY`/`DEEPSEEK_API_KEY` + `LLM_MODEL`） |
 | 持久化 | 内存 Job + TTL；总结配额独立于下载解析配额 |
-| 入口 | 解析结果区「AI 总结」；与下载同页（`VideoResultSection` 组合） |
+| 入口 | 解析成功后**自动总结**（需已配置 LLM）；失败可重试 /「重新总结」；与下载左右同屏（`VideoResultSection` + `SplitResultShell`） |
 | 展示约定 | `outline.start` 仅存数据；**总结摘要 / 思维导图 UI 不展示时间线** |
 | 不做（暂） | 本地上传视频、笔记同步到第三方、真实支付解锁 |
 
@@ -34,13 +34,13 @@
 
 ```
 用户已解析视频
-  → POST /api/summarize { url }
+  →（前端自动）POST /api/summarize { url }   # LLM 已配置时；无需再点「AI 总结」
   → 限流 + 日总结配额 → 创建 job（queued）
   → 后台线程：
        fetching_subtitles → 写入 cues / transcript（前端字幕 Tab 即可用）
        summarizing → LLM 流式 Markdown → 解析为 partial result + mindmap
   → 前端 EventSource GET /api/summarize/{id}/events（失败时可降级轮询 status）
-  → 总结摘要按结构化字段渲染；完成后导图 PNG、问答可用
+  → 左右同屏：左下载信息 / 右四 Tab（总结摘要 / 字幕 / 导图 / 问答）
   → POST /api/summarize/{id}/ask[/stream] 基于字幕问答
 
 可选（不跑总结）：
@@ -113,14 +113,15 @@
 
 | 文件 | 职责 |
 |---|---|
-| `summary/VideoResultSection.tsx` | 组合下载 `ResultPanel` + 总结入口 / 独立字幕下载 / 面板 |
-| `summary/SummaryPanel.tsx` | 四 Tab：文档式摘要、字幕导出、导图全屏、问答 |
+| `summary/SplitResultShell.tsx` | 左右同屏布局壳（lg 双栏 / 移动端堆叠） |
+| `summary/VideoResultSection.tsx` | 组合下载 `ResultPanel` + 自动总结 / 独立字幕下载 / 面板 |
+| `summary/SummaryPanel.tsx` | 四 Tab：文档式摘要、字幕导出、导图全屏、问答；支持 embedded 窄栏 |
 | `summary/mindmapRender.ts` | 彩色曲线导图 Canvas（自适应布局 / 清洗标签 / 高清导出） |
 | `summary/subtitleExport.ts` | 前端 cues → SRT/VTT/TXT |
-| `summary/useVideoSummary.ts` | SSE 订阅、问答流式状态 |
+| `summary/useVideoSummary.ts` | metaReady、SSE 订阅、问答流式状态 |
 | `summary/summaryApi.ts` | `/api/summary*`、`/api/subtitles` 客户端 |
 | `summary/summaryTypes.ts` | 类型定义 |
-| `App.tsx` | 最少挂载：有 `info` 时渲染 `VideoResultSection` |
+| `App.tsx` | 有 `info` 时渲染 `VideoResultSection` |
 
 ## 字幕策略（B 站）
 
@@ -160,6 +161,8 @@
 
 ## UI 行为摘要
 
+- **左右同屏**：解析结果左栏为封面 / 标题 / 清晰度下载 / 字幕；右栏为 AI 总结四 Tab（`lg+` 并排，移动端上下堆叠）
+- **自动总结**：`/api/summary/meta` 就绪且 `llm_configured` 后自动启动；失败展示原因 +「重试」；可「重新总结」
 - 总结中：SSE 推送结构化 `result`；前端按章节文档式渲染（清洗时间戳与 `**`）
 - 「复制 Markdown」导出干净文本（无时间戳、无原始 MD 噪声）
 - 拉到字幕后即可切换「字幕文本」，并可导出 SRT/VTT/TXT

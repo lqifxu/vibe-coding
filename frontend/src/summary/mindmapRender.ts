@@ -206,11 +206,6 @@ function measureTree(
   }
 }
 
-function subtreeLeaves(m: Measured): number {
-  if (!m.children.length) return 1
-  return m.children.reduce((n, c) => n + subtreeLeaves(c), 0)
-}
-
 /** Needed vertical span so multi-line nodes don't overlap. */
 function minSpan(m: Measured): number {
   if (!m.children.length) return Math.max(MIN_LEAF_SLOT, m.h + 12)
@@ -289,7 +284,7 @@ function layoutMindmap(
   return { nodes, width, height: Math.ceil(Math.max(height, maxBottom + PAD_Y)) }
 }
 
-export function mindmapLogicalSize(root: MindmapNode, fullText = false): { width: number; height: number } {
+export function mindmapLogicalSize(root: MindmapNode, _fullText = false): { width: number; height: number } {
   const leaves = countLeaves(root)
   return {
     width: 900,

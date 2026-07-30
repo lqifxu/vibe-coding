@@ -9,6 +9,7 @@ import type { QaMessage, SummaryJob, SummaryResult } from './summaryTypes'
 
 export function useVideoSummary() {
   const [llmConfigured, setLlmConfigured] = useState(false)
+  const [metaReady, setMetaReady] = useState(false)
   const [summarizing, setSummarizing] = useState(false)
   const [summaryStage, setSummaryStage] = useState<SummaryJob['stage'] | null>(null)
   const [summaryResult, setSummaryResult] = useState<SummaryResult | null>(null)
@@ -24,6 +25,7 @@ export function useVideoSummary() {
     fetchSummaryMeta()
       .then((m) => setLlmConfigured(!!m.llm_configured))
       .catch(() => setLlmConfigured(false))
+      .finally(() => setMetaReady(true))
     return () => {
       unsubRef.current?.()
       askAbortRef.current?.abort()
@@ -142,6 +144,7 @@ export function useVideoSummary() {
 
   return {
     llmConfigured,
+    metaReady,
     summarizing,
     summaryStage,
     summaryResult,

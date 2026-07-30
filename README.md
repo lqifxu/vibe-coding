@@ -13,7 +13,7 @@ AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方
 - 解析多平台视频信息与清晰度列表，下载到浏览器本地
 - 仿 [鱼皮 AI 绘图](https://ai.codefather.cn/painting) 风格的转化型落地页
 - Pro / 批量等入口占位（未接真实支付）
-- **AI 视频总结**（解析结果区四个 Tab）：
+- **AI 视频总结**（解析后自动总结，与下载左右同屏；四个 Tab）：
   - **总结摘要**：文档式排版（视频概述、内容大纲、核心知识要点、总结；不展示时间线）
   - **字幕文本**：带时间戳的完整字幕列表，可下载 SRT / VTT / TXT
   - **思维导图**：彩色曲线导图，支持全屏缩放拖拽与 2× 高清 PNG 下载
@@ -136,13 +136,14 @@ AI 总结相关（`backend/.env`，参考 `.env.example`）：
 ## AI 视频总结用法
 
 1. 在 `backend/.env` 配置 `LLM_API_KEY`（或 `DEEPSEEK_API_KEY`）
-2. 前端解析视频后点击 **AI 总结**
+2. 前端粘贴链接并解析；**解析成功后自动开始 AI 总结**（左右同屏展示）
 3. 后端拉取字幕（yt-dlp → B 站 `dm/view` AI 字幕免登录回退等）→ **流式**生成 Markdown 笔记
-4. 结果区四个 Tab：
+4. 右侧四个 Tab：
    - 总结摘要（逐字打出）
    - 字幕文本
    - 思维导图（PNG 图片，可下载）
    - AI 问答（基于字幕）
+5. 失败时可点「重试」或「重新总结」
 
 本地演示链接（无需外网字幕）：`https://jisuxia.local/demo/ai-summary`
 
@@ -174,7 +175,9 @@ backend/app/                 # FastAPI 下载核心 + 总结扩展
   llm_service.py             # DeepSeek 等 LLM（流式总结 / 问答）
   summary_jobs.py            # 内存异步 Job
 frontend/src/
-  summary/                   # AI 总结 UI（OCP 组合挂载）
+  summary/                   # AI 总结 UI：同屏布局 + 自动总结（OCP）
+    SplitResultShell.tsx     # 左右同屏壳
+    VideoResultSection.tsx   # 组合下载结果与总结
 docs/项目总结.md
 docs/AI视频总结方案.md
 ```

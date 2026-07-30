@@ -25,6 +25,10 @@ type Props = {
   onAsk: (question: string) => void
   onRetry: () => void
   onProClick?: () => void
+  /** Inside SplitResultShell — no outer card / top margin. */
+  embedded?: boolean
+  /** Marketing demo: soften QA input, keep copy optional. */
+  demoMode?: boolean
 }
 
 type TabId = 'summary' | 'transcript' | 'mindmap' | 'qa'
@@ -529,11 +533,13 @@ function QaBody({
   loading,
   disabled,
   onAsk,
+  demoMode,
 }: {
   messages: QaMessage[]
   loading: boolean
   disabled: boolean
   onAsk: (q: string) => void
+  demoMode?: boolean
 }) {
   const [input, setInput] = useState('')
   const suggestions = ['这个视频的核心结论是什么？', '适合零基础吗？', '学习路线分哪几步？']
@@ -542,7 +548,11 @@ function QaBody({
     <div className="space-y-3 text-left">
       <div className="max-h-72 space-y-3 overflow-y-auto rounded-xl border border-line bg-surface/40 p-3">
         {messages.length === 0 && (
-          <p className="text-sm text-muted">基于本视频字幕提问，例如学习路线、重点概念等。</p>
+          <p className="text-sm text-muted">
+            {demoMode
+              ? '演示对话如下。解析真实视频后可自由提问。'
+              : '基于本视频字幕提问，例如学习路线、重点概念等。'}
+          </p>
         )}
         {messages.map((m, i) => (
           <div
@@ -559,43 +569,49 @@ function QaBody({
           </div>
         ))}
       </div>
-      <div className="flex flex-wrap gap-2">
-        {suggestions.map((s) => (
-          <button
-            key={s}
-            type="button"
-            disabled={disabled || loading}
-            onClick={() => onAsk(s)}
-            className="rounded-full border border-line px-3 py-1 text-xs text-muted hover:border-brand/40 hover:text-brand disabled:opacity-50"
+      {demoMode ? (
+        <p className="text-xs text-muted">演示模式不支持提问，请在上方粘贴真实链接体验完整 AI 问答。</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap gap-2">
+            {suggestions.map((s) => (
+              <button
+                key={s}
+                type="button"
+                disabled={disabled || loading}
+                onClick={() => onAsk(s)}
+                className="rounded-full border border-line px-3 py-1 text-xs text-muted hover:border-brand/40 hover:text-brand disabled:opacity-50"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+          <form
+            className="flex gap-2"
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (!input.trim()) return
+              onAsk(input)
+              setInput('')
+            }}
           >
-            {s}
-          </button>
-        ))}
-      </div>
-      <form
-        className="flex gap-2"
-        onSubmit={(e) => {
-          e.preventDefault()
-          if (!input.trim()) return
-          onAsk(input)
-          setInput('')
-        }}
-      >
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          disabled={disabled || loading}
-          placeholder={disabled ? '请先完成总结后再提问' : '输入你的问题…'}
-          className="flex-1 rounded-xl border border-line px-3 py-2 text-sm outline-none focus:border-brand"
-        />
-        <button
-          type="submit"
-          disabled={disabled || loading || !input.trim()}
-          className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-        >
-          发送
-        </button>
-      </form>
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={disabled || loading}
+              placeholder={disabled ? '请先完成总结后再提问' : '输入你的问题…'}
+              className="flex-1 rounded-xl border border-line px-3 py-2 text-sm outline-none focus:border-brand"
+            />
+            <button
+              type="submit"
+              disabled={disabled || loading || !input.trim()}
+              className="rounded-xl bg-brand px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+            >
+              发送
+            </button>
+          </form>
+        </>
+      )}
     </div>
   )
 }
@@ -611,6 +627,8 @@ export function SummaryPanel({
   onAsk,
   onRetry,
   onProClick,
+  embedded = false,
+  demoMode = false,
 }: Props) {
   const [tab, setTab] = useState<TabId>('summary')
   const hasPartial =
@@ -620,10 +638,14 @@ export function SummaryPanel({
       !!result.cues?.length ||
       !!streamMarkdown)
 
+  const shellClass = embedded
+    ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
+    : 'mt-4 overflow-hidden rounded-2xl border border-line bg-white shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)]'
+
   return (
-    <div className="mt-4 overflow-hidden rounded-2xl border border-line bg-white shadow-[0_8px_30px_-12px_rgba(15,23,42,0.12)]">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-2 pt-2 sm:px-3">
-        <div className="flex flex-1 gap-1 overflow-x-auto">
+    <div className={shellClass}>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line px-1 pt-1 sm:px-2">
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto pb-px">
           {TABS.map((t) => {
             const active = tab === t.id
             return (
@@ -632,7 +654,7 @@ export function SummaryPanel({
                 type="button"
                 onClick={() => setTab(t.id)}
                 className={[
-                  'whitespace-nowrap rounded-t-lg px-3 py-2.5 text-sm transition',
+                  'shrink-0 whitespace-nowrap rounded-t-lg px-2.5 py-2 text-sm transition sm:px-3 sm:py-2.5',
                   active
                     ? 'border-b-2 border-brand font-medium text-brand'
                     : 'text-muted hover:text-ink',
@@ -644,13 +666,13 @@ export function SummaryPanel({
           })}
         </div>
         {result && result.overview && (
-          <div className="pb-2 pr-2">
+          <div className="pb-2 pr-1">
             <CopyButton result={result} />
           </div>
         )}
       </div>
 
-      <div className="px-4 py-4 sm:px-5">
+      <div className={embedded ? 'max-h-[32rem] overflow-y-auto py-3 lg:max-h-[36rem]' : 'px-4 py-4 sm:px-5'}>
         {loading && !hasPartial && (
           <div className="rounded-xl border border-dashed border-brand/30 bg-brand/5 px-4 py-6 text-center text-sm text-brand">
             {stageLabel(stage)}
@@ -669,13 +691,15 @@ export function SummaryPanel({
                 查看 Pro
               </button>
             )}
-            <button
-              type="button"
-              onClick={onRetry}
-              className="ml-2 font-medium text-ink underline"
-            >
-              重试
-            </button>
+            {!demoMode && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="ml-2 font-medium text-ink underline"
+              >
+                重试
+              </button>
+            )}
           </div>
         )}
 
@@ -703,8 +727,9 @@ export function SummaryPanel({
           <QaBody
             messages={qaMessages}
             loading={qaLoading}
-            disabled={!result?.transcript}
+            disabled={demoMode || !result?.transcript}
             onAsk={onAsk}
+            demoMode={demoMode}
           />
         )}
       </div>
