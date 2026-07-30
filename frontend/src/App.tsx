@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react'
 import { downloadVideo, fetchHealth, fetchInfo } from './api'
+import { FaqSection } from './components/FaqSection'
+import { FeatureIntro } from './components/FeatureIntro'
 import { Footer } from './components/Footer'
 import { Header } from './components/Header'
 import { HeroParse } from './components/HeroParse'
+import { HowItWorks } from './components/HowItWorks'
 import { PlatformGrid } from './components/PlatformGrid'
 import { ProModal, ProSection } from './components/ProSection'
+import { SeoJsonLd } from './seo/SeoJsonLd'
 import { VideoResultSection } from './summary/VideoResultSection'
 import type { VideoFormat, VideoInfo } from './types'
 import { extractUrlFromText, NO_URL_MESSAGE } from './urlExtract'
@@ -71,6 +75,7 @@ export default function App() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <SeoJsonLd />
       <Header onProClick={() => setProOpen(true)} />
       <main className="flex-1">
         <HeroParse
@@ -114,6 +119,9 @@ export default function App() {
         )}
 
         <PlatformGrid />
+        <FeatureIntro />
+        <HowItWorks />
+        <FaqSection />
         <ProSection onProClick={() => setProOpen(true)} />
       </main>
       <Footer />

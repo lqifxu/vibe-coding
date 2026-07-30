@@ -41,8 +41,11 @@ export function PlatformGrid() {
   return (
     <section id="platforms" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
       <div className="mb-8 text-center">
-        <h2 className="font-display text-2xl font-bold text-ink sm:text-3xl">支持主流平台</h2>
-        <p className="mt-2 text-muted">站在 yt-dlp 肩膀上，覆盖上千站点 · 持续更新</p>
+        <h2 className="font-display text-2xl font-bold text-ink sm:text-3xl">支持主流平台视频下载</h2>
+        <p className="mx-auto mt-2 max-w-2xl text-muted">
+          覆盖 B站视频下载、抖音视频下载、YouTube 等主流站点；站在 yt-dlp 肩膀上持续扩展更多来源。
+          是否可解析、可用清晰度与字幕，以源站实际能力为准。
+        </p>
       </div>
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-3">
         {PLATFORMS.map((p) => (

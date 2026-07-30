@@ -10,12 +10,21 @@ export function Header({ onProClick }: { onProClick: () => void }) {
             极速下
           </span>
         </a>
-        <nav className="hidden items-center gap-6 text-sm text-muted sm:flex">
+        <nav className="hidden items-center gap-5 text-sm text-muted lg:flex">
           <a href="#parse" className="transition hover:text-brand">
             开始下载
           </a>
           <a href="#platforms" className="transition hover:text-brand">
             支持平台
+          </a>
+          <a href="#features" className="transition hover:text-brand">
+            功能介绍
+          </a>
+          <a href="#how-it-works" className="transition hover:text-brand">
+            使用流程
+          </a>
+          <a href="#faq" className="transition hover:text-brand">
+            常见问题
           </a>
           <a href="#pro" className="transition hover:text-brand">
             Pro 能力

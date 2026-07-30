@@ -10,12 +10,11 @@ export function HeroParse({ url, loading, remaining, onUrlChange, onSubmit }: Pr
   return (
     <section id="parse" className="mx-auto max-w-3xl px-4 pb-10 pt-14 text-center sm:px-6 sm:pt-20">
       <h1 className="animate-fade-up font-display text-3xl font-bold leading-tight tracking-tight text-ink sm:text-5xl">
-        万能视频下载，
-        <span className="text-brand">一键保存</span>
-        到本地
+        <span className="block text-brand">极速下</span>
+        万能视频下载与 AI 总结，一键保存到本地
       </h1>
       <p className="animate-fade-up-delay mt-4 text-base text-muted sm:text-lg">
-        粘贴链接即可解析多清晰度，手机电脑都能下 · 覆盖主流平台
+        视频链接解析 · B站 / 抖音下载 · 字幕下载 · AI 视频总结，手机电脑都能用
       </p>
 
       <form

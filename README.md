@@ -73,6 +73,8 @@ npm run dev
 浏览器打开：<http://127.0.0.1:5173>  
 开发服务器已将 `/api` 代理到后端 `8001` 端口。
 
+SEO 站点域名：编辑 `frontend/.env`（可参考 `.env.example`）中的 `VITE_SITE_URL`。本地默认 `http://localhost:5173`；上线改为正式 `https` 域名后重新构建，canonical / OG / `robots.txt` / `sitemap.xml` 会一并更新。
+
 ## 抖音取链说明
 
 | 可用 | 示例 |

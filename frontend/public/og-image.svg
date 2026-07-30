@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none">
+  <rect width="1200" height="630" fill="#F5F7FA"/>
+  <rect width="1200" height="630" fill="url(#bg)" opacity="0.9"/>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="630" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#1777FF" stop-opacity="0.14"/>
+      <stop offset="1" stop-color="#F5F7FA" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="72" y="180" width="96" height="96" rx="24" fill="#1777FF"/>
+  <path d="M100 208h48v12H116v44h-16V208zm32 28l24 16-24 16v-32z" fill="#fff"/>
+  <text x="196" y="242" fill="#0F172A" font-family="Segoe UI, Noto Sans SC, sans-serif" font-size="64" font-weight="700"></text>
+  <text x="196" y="300" fill="#334155" font-family="Segoe UI, Noto Sans SC, sans-serif" font-size="36" font-weight="600">ýÆ‘} AI Æ‘;Ó</text>
+  <text x="196" y="360" fill="#64748B" font-family="Segoe UI, Noto Sans SC, sans-serif" font-size="28">þ¥ã · BÙ/–ó} · WU · AI;Ó</text>
+</svg>

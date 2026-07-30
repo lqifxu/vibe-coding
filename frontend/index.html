@@ -2,15 +2,131 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>极速下 - 万能视频下载</title>
+    <title>极速下 - 万能视频下载与AI视频总结</title>
+    <meta
+      name="description"
+      content="极速下是免费的视频下载与 AI 视频总结工具：支持视频链接解析、B站视频下载、抖音视频下载、视频字幕下载，以及 AI 视频总结与思维导图，手机电脑均可使用。"
+    />
+    <meta
+      name="keywords"
+      content="视频下载,视频链接解析,B站视频下载,抖音视频下载,视频字幕下载,AI视频总结,视频总结工具,极速下"
+    />
+    <meta name="author" content="极速下" />
+    <meta name="robots" content="index,follow" />
+    <meta name="googlebot" content="index,follow" />
+    <meta name="baiduspider" content="index,follow" />
+    <meta name="renderer" content="webkit" />
+    <meta name="force-rendering" content="webkit" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="format-detection" content="telephone=no" />
+    <meta name="theme-color" content="#1777FF" />
+    <link rel="canonical" href="%VITE_SITE_URL%/" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:locale" content="zh_CN" />
+    <meta property="og:site_name" content="极速下" />
+    <meta property="og:title" content="极速下 - 万能视频下载与AI视频总结" />
+    <meta
+      property="og:description"
+      content="极速下是免费的视频下载与 AI 视频总结工具：支持视频链接解析、B站视频下载、抖音视频下载、视频字幕下载，以及 AI 视频总结与思维导图。"
+    />
+    <meta property="og:url" content="%VITE_SITE_URL%/" />
+    <meta property="og:image" content="%VITE_SITE_URL%/og-image.svg" />
+    <meta property="og:image:alt" content="极速下 - 万能视频下载与AI视频总结" />
+
+    <!-- Twitter / X -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="极速下 - 万能视频下载与AI视频总结" />
+    <meta
+      name="twitter:description"
+      content="免费视频链接解析、B站/抖音下载、字幕下载与 AI 视频总结工具。"
+    />
+    <meta name="twitter:image" content="%VITE_SITE_URL%/og-image.svg" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "%VITE_SITE_URL%/#website",
+            "url": "%VITE_SITE_URL%/",
+            "name": "极速下",
+            "description": "极速下是免费的视频下载与 AI 视频总结工具：支持视频链接解析、B站视频下载、抖音视频下载、视频字幕下载与 AI 视频总结。",
+            "inLanguage": "zh-CN",
+            "publisher": { "@id": "%VITE_SITE_URL%/#organization" }
+          },
+          {
+            "@type": "Organization",
+            "@id": "%VITE_SITE_URL%/#organization",
+            "name": "极速下",
+            "url": "%VITE_SITE_URL%/",
+            "logo": {
+              "@type": "ImageObject",
+              "url": "%VITE_SITE_URL%/favicon.svg"
+            }
+          },
+          {
+            "@type": "WebApplication",
+            "@id": "%VITE_SITE_URL%/#app",
+            "name": "极速下",
+            "url": "%VITE_SITE_URL%/",
+            "applicationCategory": "MultimediaApplication",
+            "operatingSystem": "Web",
+            "inLanguage": "zh-CN",
+            "description": "万能视频下载与 AI 视频总结网页工具，支持视频链接解析、多清晰度下载、字幕导出与同页 AI 学习笔记。",
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "CNY"
+            },
+            "featureList": [
+              "视频链接解析",
+              "B站视频下载",
+              "抖音视频下载",
+              "视频字幕下载",
+              "AI视频总结",
+              "思维导图导出"
+            ]
+          }
+        ]
+      }
+    </script>
+
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body>
     <div id="root"></div>
+    <noscript>
+      <main style="max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font-family: sans-serif; line-height: 1.7; color: #1f1f1f">
+        <h1>极速下 - 万能视频下载与AI视频总结</h1>
+        <p>
+          极速下是免费的视频下载与 AI 视频总结工具：支持视频链接解析、B站视频下载、抖音视频下载、视频字幕下载，以及 AI 视频总结、字幕文本与思维导图。
+        </p>
+        <h2>支持平台</h2>
+        <p>覆盖 Bilibili、抖音 / TikTok、YouTube、小红书、Instagram、Twitter / X 等主流平台，并基于 yt-dlp 持续扩展更多站点。</p>
+        <h2>使用流程</h2>
+        <ol>
+          <li>粘贴视频链接或分享口令</li>
+          <li>点击解析，选择清晰度下载到本地</li>
+          <li>可选下载字幕（SRT / VTT / TXT）</li>
+          <li>有字幕时自动生成 AI 视频总结、大纲、思维导图，并可基于字幕问答</li>
+        </ol>
+        <h2>常见问题</h2>
+        <p><strong>是否需要登录或 Cookie？</strong> 默认下载路径无需登录；B 站部分人工字幕可选用 Cookie 增强。</p>
+        <p><strong>没有字幕能否总结？</strong> 当前需视频具备字幕或自动字幕；无字幕场景暂不支持语音转写。</p>
+        <p>请开启 JavaScript 以使用完整功能。</p>
+      </main>
+    </noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
