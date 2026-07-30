@@ -44,7 +44,7 @@ class RateLimiter:
                 day = today
             if count >= FREE_DAILY_PARSES:
                 raise RateLimitError(
-                    "今日免费解析次数已用完。升级 Pro 可无限解析。"
+                    "今日免费解析次数已用完。升级 Pro 可解锁无限解析。"
                 )
             count += 1
             self._daily[ip] = (day, count)

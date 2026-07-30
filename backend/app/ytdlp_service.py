@@ -15,6 +15,7 @@ from yt_dlp.utils import DownloadError, ExtractorError
 
 from .config import FFMPEG_DIR, MAX_DOWNLOAD_BYTES, TEMP_DIR
 from .cleanup import remove_dir
+from .demo_fixture import demo_video_info, is_demo_summary_url
 from .douyin_service import (
     DouyinError,
     download_douyin,
@@ -296,6 +297,9 @@ def validate_url(url):
 
 
 def extract_info(url):
+    if is_demo_summary_url(url):
+        return demo_video_info()
+
     if is_douyin_url(url):
         try:
             info = fetch_douyin_info(url)

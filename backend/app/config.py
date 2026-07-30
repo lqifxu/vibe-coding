@@ -35,7 +35,6 @@ def resolve_ffmpeg_dir():
             if p.is_dir() and (p / "ffmpeg").exists():
                 return str(p)
 
-    # shutil.which fallback handled by callers via PATH
     return None
 
 

@@ -5,7 +5,7 @@ import { Header } from './components/Header'
 import { HeroParse } from './components/HeroParse'
 import { PlatformGrid } from './components/PlatformGrid'
 import { ProModal, ProSection } from './components/ProSection'
-import { ResultPanel } from './components/ResultPanel'
+import { VideoResultSection } from './summary/VideoResultSection'
 import type { VideoFormat, VideoInfo } from './types'
 import { extractUrlFromText, NO_URL_MESSAGE } from './urlExtract'
 
@@ -105,10 +105,11 @@ export default function App() {
         )}
 
         {info && (
-          <ResultPanel
+          <VideoResultSection
             info={info}
             downloadingId={downloadingId}
             onDownload={handleDownload}
+            onProClick={() => setProOpen(true)}
           />
         )}
 

@@ -1,4 +1,4 @@
-"""FastAPI entry — thin HTTP layer over yt-dlp."""
+"""FastAPI entry - thin HTTP layer over yt-dlp."""
 from __future__ import annotations
 
 import logging
@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from .cleanup import remove_dir, start_cleanup_loop
 from .config import FREE_DAILY_PARSES
 from .limiter import RateLimitError, download_semaphore, rate_limiter
+from .summary_router import router as summary_router
 from .ytdlp_service import (
     YtdlpError,
     check_ffmpeg_cli,
@@ -35,6 +36,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# AI summary extension (OCP mount)
+app.include_router(summary_router)
 
 
 class UrlBody(BaseModel):
@@ -106,7 +110,7 @@ def api_download(body: DownloadBody, request: Request, background_tasks: Backgro
 
     acquired = download_semaphore.acquire(blocking=False)
     if not acquired:
-        raise YtdlpError("服务器繁忙，请稍后再试。升级 Pro 可优先排队。", status_code=503)
+        raise YtdlpError("服务器繁忙，请稍后再试。升级 Pro 可解锁下载队列。", status_code=503)
 
     try:
         media_path = download_video(url, format_id)
