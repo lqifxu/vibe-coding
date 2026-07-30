@@ -73,7 +73,23 @@ npm run dev
 浏览器打开：<http://127.0.0.1:5173>  
 开发服务器已将 `/api` 代理到后端 `8001` 端口。
 
-SEO 站点域名：编辑 `frontend/.env`（可参考 `.env.example`）中的 `VITE_SITE_URL`。本地默认 `http://localhost:5173`；上线改为正式 `https` 域名后重新构建，canonical / OG / `robots.txt` / `sitemap.xml` 会一并更新。
+### 4. SEO（上线必改）
+
+编辑 `frontend/.env`（可参考 `frontend/.env.example`）：
+
+```bash
+VITE_SITE_URL=http://localhost:5173
+```
+
+上线改为正式 `https://你的域名` 后执行 `npm run build`。将同时更新：
+
+- canonical / Open Graph / Twitter 卡片中的站点地址
+- 构建产物 `robots.txt`、`sitemap.xml`
+- JSON-LD 中的站点 URL
+
+首页另有可抓取内容区：支持平台、功能介绍、使用流程、FAQ（与真实产品能力一致）。上线后请在百度站长平台 / Google Search Console 提交 `https://你的域名/sitemap.xml`。
+
+更完整说明见 [docs/项目总结.md](docs/项目总结.md) 第 7 节。
 
 ## 抖音取链说明
 
@@ -176,11 +192,14 @@ backend/app/                 # FastAPI 下载核心 + 总结扩展
   subtitle_service.py        # 字幕拉取与解析
   llm_service.py             # DeepSeek 等 LLM（流式总结 / 问答）
   summary_jobs.py            # 内存异步 Job
-frontend/src/
-  summary/                   # AI 总结 UI：同屏布局 + 自动总结（OCP）
+frontend/
+  .env.example               # VITE_SITE_URL（SEO 域名）
+  index.html                 # On-page meta / OG / JSON-LD
+  src/seo/                   # 站点配置、FAQ 数据、FAQPage JSON-LD
+  src/summary/               # AI 总结 UI：同屏布局 + 自动总结（OCP）
     SplitResultShell.tsx     # 左右同屏壳
     VideoResultSection.tsx   # 组合下载结果与总结
-docs/项目总结.md
+docs/项目总结.md             # 产品与验收沉淀（含 SEO）
 docs/AI视频总结方案.md
 ```
 
