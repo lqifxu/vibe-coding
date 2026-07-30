@@ -26,7 +26,9 @@ export function HowItWorks() {
     <section id="how-it-works" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-16">
       <div className="mb-8 text-center">
         <h2 className="font-display text-2xl font-bold text-ink sm:text-3xl">下载流程怎么走</h2>
-        <p className="mt-2 text-muted">四步完成解析、下载、字幕与总结，无需安装客户端</p>
+        <p className="mt-2 text-muted">
+          四步完成解析、下载、字幕与总结，无需安装客户端。B 站 / 抖音 / 字幕的分步说明见下方「能力说明」。
+        </p>
       </div>
       <ol className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {STEPS.map((s) => (

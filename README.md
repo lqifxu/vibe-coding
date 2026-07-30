@@ -87,9 +87,20 @@ VITE_SITE_URL=http://localhost:5173
 - 构建产物 `robots.txt`、`sitemap.xml`
 - JSON-LD 中的站点 URL
 
-首页另有可抓取内容区：支持平台、功能介绍、使用流程、FAQ（与真实产品能力一致）。上线后请在百度站长平台 / Google Search Console 提交 `https://你的域名/sitemap.xml`。
+首页另有可抓取内容区：支持平台、功能介绍、使用流程、能力说明（GEO）、FAQ（与真实产品能力一致）。上线后请在百度站长平台 / Google Search Console 提交 `https://你的域名/sitemap.xml`。
 
-更完整说明见 [docs/项目总结.md](docs/项目总结.md) 第 7 节。
+### 5. GEO（AI 对话可引用）
+
+构建后根路径提供：
+
+- `/llms.txt` — 给模型的简要索引
+- `/llms-full.txt` — 完整能力边界与操作步骤
+
+`robots.txt` 允许 GPTBot、ChatGPT-User、PerplexityBot、ClaudeBot、Google-Extended、Bingbot 等检索/引用类爬虫；禁止 CCBot、Applebot-Extended 等纯训练向爬虫；不改变 Google / 百度正常抓取。
+
+未提供 `pricing.md`：免费额度随环境变量变化，Pro 尚未正式公开定价，避免编造数字。
+
+更完整说明见 [docs/项目总结.md](docs/项目总结.md) 第 7 / 7.1 节。
 
 ## 抖音取链说明
 
@@ -193,15 +204,18 @@ backend/app/                 # FastAPI 下载核心 + 总结扩展
   llm_service.py             # DeepSeek 等 LLM（流式总结 / 问答）
   summary_jobs.py            # 内存异步 Job
 frontend/
-  .env.example               # VITE_SITE_URL（SEO 域名）
+  .env.example               # VITE_SITE_URL（SEO/GEO 域名）
   index.html                 # On-page meta / OG / JSON-LD
-  src/seo/                   # 站点配置、FAQ 数据、FAQPage JSON-LD
+  src/seo/                   # 站点配置、FAQ、GEO 静态文案、llms/robots 生成
+  src/components/GeoKnowledge.tsx  # 可抽取能力说明区
   src/summary/               # AI 总结 UI：同屏布局 + 自动总结（OCP）
     SplitResultShell.tsx     # 左右同屏壳
     VideoResultSection.tsx   # 组合下载结果与总结
-docs/项目总结.md             # 产品与验收沉淀（含 SEO）
+docs/项目总结.md             # 产品与验收沉淀（含 SEO / GEO）
 docs/AI视频总结方案.md
 ```
+
+构建产物还会生成：`robots.txt`、`sitemap.xml`、`llms.txt`、`llms-full.txt`。
 
 ## 免责声明
 

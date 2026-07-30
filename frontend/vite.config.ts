@@ -1,3 +1,9 @@
+import {
+  buildLlmsFullTxt,
+  buildLlmsTxt,
+  buildRobotsTxt,
+  buildSitemapXml,
+} from './src/seo/geoStatic.ts'
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
@@ -6,54 +12,28 @@ function normalizeSiteUrl(raw: string): string {
   return raw.replace(/\/+$/, '')
 }
 
-function buildRobotsTxt(siteUrl: string): string {
-  return [
-    'User-agent: *',
-    'Allow: /',
-    '',
-    'User-agent: Baiduspider',
-    'Allow: /',
-    '',
-    'User-agent: Googlebot',
-    'Allow: /',
-    '',
-    `Sitemap: ${siteUrl}/sitemap.xml`,
-    '',
-  ].join('\n')
-}
-
-function buildSitemapXml(siteUrl: string): string {
-  const lastmod = new Date().toISOString().slice(0, 10)
-  return `<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-  <url>
-    <loc>${siteUrl}/</loc>
-    <lastmod>${lastmod}</lastmod>
-    <changefreq>weekly</changefreq>
-    <priority>1.0</priority>
-  </url>
-</urlset>
-`
-}
-
-/** 按 VITE_SITE_URL 生成 robots.txt / sitemap.xml（开发态中间件 + 构建产物） */
+/** 按 VITE_SITE_URL 生成 robots / sitemap / llms.txt（开发中间件 + 构建产物） */
 function seoStaticFiles(siteUrl: string): Plugin {
   const robots = buildRobotsTxt(siteUrl)
   const sitemap = buildSitemapXml(siteUrl)
+  const llms = buildLlmsTxt(siteUrl)
+  const llmsFull = buildLlmsFullTxt(siteUrl)
 
   return {
     name: 'seo-static-files',
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
         const path = req.url?.split('?')[0]
-        if (path === '/robots.txt') {
-          res.setHeader('Content-Type', 'text/plain; charset=utf-8')
-          res.end(robots)
-          return
+        const map: Record<string, { type: string; body: string }> = {
+          '/robots.txt': { type: 'text/plain; charset=utf-8', body: robots },
+          '/sitemap.xml': { type: 'application/xml; charset=utf-8', body: sitemap },
+          '/llms.txt': { type: 'text/plain; charset=utf-8', body: llms },
+          '/llms-full.txt': { type: 'text/plain; charset=utf-8', body: llmsFull },
         }
-        if (path === '/sitemap.xml') {
-          res.setHeader('Content-Type', 'application/xml; charset=utf-8')
-          res.end(sitemap)
+        const hit = path ? map[path] : undefined
+        if (hit) {
+          res.setHeader('Content-Type', hit.type)
+          res.end(hit.body)
           return
         }
         next()
@@ -62,6 +42,8 @@ function seoStaticFiles(siteUrl: string): Plugin {
     generateBundle() {
       this.emitFile({ type: 'asset', fileName: 'robots.txt', source: robots })
       this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: sitemap })
+      this.emitFile({ type: 'asset', fileName: 'llms.txt', source: llms })
+      this.emitFile({ type: 'asset', fileName: 'llms-full.txt', source: llmsFull })
     },
   }
 }

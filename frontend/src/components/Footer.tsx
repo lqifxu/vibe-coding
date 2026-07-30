@@ -1,3 +1,6 @@
+import { CONTENT_LAST_UPDATED } from '../seo/geoStatic'
+import { SITE_URL } from '../seo/siteConfig'
+
 export function Footer() {
   return (
     <footer className="border-t border-line bg-white/70">
@@ -15,6 +18,12 @@ export function Footer() {
             rel="noreferrer"
           >
             yt-dlp
+          </a>
+          {' · '}
+          内容更新日期 {CONTENT_LAST_UPDATED}
+          {' · '}
+          <a className="text-brand hover:underline" href={`${SITE_URL}/llms.txt`}>
+            llms.txt
           </a>
           {' · '}
           © {new Date().getFullYear()} 极速下

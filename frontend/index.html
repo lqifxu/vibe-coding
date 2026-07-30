@@ -110,21 +110,24 @@
       <main style="max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font-family: sans-serif; line-height: 1.7; color: #1f1f1f">
         <h1>极速下 - 万能视频下载与AI视频总结</h1>
         <p>
-          极速下是免费的视频下载与 AI 视频总结工具：支持视频链接解析、B站视频下载、抖音视频下载、视频字幕下载，以及 AI 视频总结、字幕文本与思维导图。
+          极速下是网页版视频下载与 AI 视频总结工具：支持视频链接解析、B站/抖音等平台下载、字幕导出（SRT/VTT/TXT），以及在有字幕时生成 AI 总结、思维导图与问答。
+        </p>
+        <h2>什么是 AI 视频总结工具</h2>
+        <p>
+          基于视频字幕用大模型生成概述、大纲、要点与结论。极速下需可用字幕且站点已配置大模型；当前不做无字幕 ASR；抖音暂不支持总结。
         </p>
         <h2>支持平台</h2>
-        <p>覆盖 Bilibili、抖音 / TikTok、YouTube、小红书、Instagram、Twitter / X 等主流平台，并基于 yt-dlp 持续扩展更多站点。</p>
+        <p>覆盖 Bilibili、抖音 / TikTok、YouTube、小红书、Instagram、Twitter / X 等，并基于 yt-dlp 扩展更多站点。</p>
         <h2>使用流程</h2>
         <ol>
           <li>粘贴视频链接或分享口令</li>
           <li>点击解析，选择清晰度下载到本地</li>
           <li>可选下载字幕（SRT / VTT / TXT）</li>
-          <li>有字幕时自动生成 AI 视频总结、大纲、思维导图，并可基于字幕问答</li>
+          <li>有字幕时生成 AI 视频总结、大纲、思维导图，并可基于字幕问答</li>
         </ol>
-        <h2>常见问题</h2>
-        <p><strong>是否需要登录或 Cookie？</strong> 默认下载路径无需登录；B 站部分人工字幕可选用 Cookie 增强。</p>
-        <p><strong>没有字幕能否总结？</strong> 当前需视频具备字幕或自动字幕；无字幕场景暂不支持语音转写。</p>
-        <p>请开启 JavaScript 以使用完整功能。</p>
+        <h2>使用限制与版权</h2>
+        <p>有每日解析/总结次数限制（以页面提示为准）。仅供个人学习与合法备份，请遵守平台条款与版权法。</p>
+        <p>机器可读说明见 /llms.txt 与 /llms-full.txt。请开启 JavaScript 以使用完整功能。</p>
       </main>
     </noscript>
     <script type="module" src="/src/main.tsx"></script>

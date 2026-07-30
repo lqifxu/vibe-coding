@@ -3,6 +3,7 @@ import { downloadVideo, fetchHealth, fetchInfo } from './api'
 import { FaqSection } from './components/FaqSection'
 import { FeatureIntro } from './components/FeatureIntro'
 import { Footer } from './components/Footer'
+import { GeoKnowledge } from './components/GeoKnowledge'
 import { Header } from './components/Header'
 import { HeroParse } from './components/HeroParse'
 import { HowItWorks } from './components/HowItWorks'
@@ -121,6 +122,7 @@ export default function App() {
         <PlatformGrid />
         <FeatureIntro />
         <HowItWorks />
+        <GeoKnowledge />
         <FaqSection />
         <ProSection onProClick={() => setProOpen(true)} />
       </main>
