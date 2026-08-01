@@ -11,6 +11,8 @@ type Props = {
   downloadingId: string | null
   onDownload: (fmt: VideoFormat) => void
   onProClick?: () => void
+  isVip?: boolean
+  remainingSummaries?: number | null
 }
 
 const SUB_FORMATS: { id: SubtitleDownloadFormat; label: string }[] = [
@@ -25,6 +27,8 @@ export function VideoResultSection({
   downloadingId,
   onDownload,
   onProClick,
+  isVip = false,
+  remainingSummaries = null,
 }: Props) {
   const {
     llmConfigured,
@@ -36,10 +40,18 @@ export function VideoResultSection({
     streamMarkdown,
     qaMessages,
     qaLoading,
+    remainingSummaries: localRemaining,
+    isVip: localVip,
     runSummarize,
     resetSummary,
     askQuestion,
   } = useVideoSummary()
+
+  const vip = isVip || localVip
+  const remain =
+    typeof localRemaining === 'number' || localRemaining === null
+      ? localRemaining
+      : remainingSummaries
 
   const [subLoading, setSubLoading] = useState(false)
   const [subError, setSubError] = useState<string | null>(null)
@@ -148,7 +160,17 @@ export function VideoResultSection({
         <div className="flex h-full min-h-[16rem] flex-col">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="font-display text-sm font-semibold text-ink sm:text-base">AI 视频总结</h3>
-            {waitingMeta && <span className="text-xs text-muted">检查 AI 服务…</span>}
+            <div className="flex items-center gap-2 text-xs text-muted">
+              {waitingMeta && <span>检查 AI 服务…</span>}
+              {!waitingMeta && vip && (
+                <span className="rounded-full bg-brand/10 px-2 py-0.5 font-medium text-brand">
+                  Pro · 无限次
+                </span>
+              )}
+              {!waitingMeta && !vip && typeof remain === 'number' && (
+                <span>今日剩余 {remain} 次</span>
+              )}
+            </div>
           </div>
           <SummaryPanel
             loading={summarizing || waitingMeta}

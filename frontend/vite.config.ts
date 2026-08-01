@@ -55,7 +55,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react(), tailwindcss(), seoStaticFiles(siteUrl)],
     server: {
+      // Bind IPv4 explicitly so Stripe success_url (127.0.0.1:5173) works on Windows
+      host: '127.0.0.1',
       port: 5173,
+      strictPort: true,
       proxy: {
         '/api': {
           target: 'http://127.0.0.1:8001',

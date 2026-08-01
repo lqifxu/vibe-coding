@@ -2,6 +2,15 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Ensure backend/.env is loaded before reading FREE_DAILY_PARSES etc.
+try:
+    from .settings import _load_dotenv
+
+    _load_dotenv()
+except Exception:
+    pass
+
 TEMP_DIR = Path(os.getenv("TEMP_DIR", str(BASE_DIR / "temp")))
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 

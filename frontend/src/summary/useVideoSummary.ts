@@ -18,12 +18,23 @@ export function useVideoSummary() {
   const [streamMarkdown, setStreamMarkdown] = useState('')
   const [qaMessages, setQaMessages] = useState<QaMessage[]>([])
   const [qaLoading, setQaLoading] = useState(false)
+  const [remainingSummaries, setRemainingSummaries] = useState<number | null | undefined>(
+    undefined,
+  )
+  const [isVip, setIsVip] = useState(false)
   const unsubRef = useRef<(() => void) | null>(null)
   const askAbortRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
     fetchSummaryMeta()
-      .then((m) => setLlmConfigured(!!m.llm_configured))
+      .then((m) => {
+        setLlmConfigured(!!m.llm_configured)
+        setIsVip(!!m.is_vip)
+        if (m.is_vip) setRemainingSummaries(null)
+        else if (typeof m.remaining_summaries === 'number') {
+          setRemainingSummaries(m.remaining_summaries)
+        }
+      })
       .catch(() => setLlmConfigured(false))
       .finally(() => setMetaReady(true))
     return () => {
@@ -82,9 +93,16 @@ export function useVideoSummary() {
       setSummarizing(true)
       setSummaryStage(null)
       try {
-        const { job_id } = await startSummarize(url)
-        setJobId(job_id)
-        unsubRef.current = subscribeSummarizeEvents(job_id, {
+        const started = await startSummarize(url)
+        setJobId(started.job_id)
+        if (started.is_vip || started.remaining_summaries === null) {
+          setIsVip(true)
+          setRemainingSummaries(null)
+        } else if (typeof started.remaining_summaries === 'number') {
+          setIsVip(false)
+          setRemainingSummaries(started.remaining_summaries)
+        }
+        unsubRef.current = subscribeSummarizeEvents(started.job_id, {
           onUpdate: applyJob,
           onError: (msg) => {
             setSummarizing(false)
@@ -153,6 +171,8 @@ export function useVideoSummary() {
     jobId,
     qaMessages,
     qaLoading,
+    remainingSummaries,
+    isVip,
     runSummarize,
     resetSummary,
     askQuestion,

@@ -1,17 +1,69 @@
+import { useState } from 'react'
+import type { AuthUser } from '../auth/authApi'
+
 const FEATURES = [
-  { title: '无限解析', desc: '告别每日次数限制，随时随地下载', soon: false },
+  { title: '解析无限次', desc: '免费每日 10 次；Pro 不限次', soon: false },
+  { title: 'AI 总结无限次', desc: '免费每日 10 次；Pro 不限次', soon: false },
   { title: '批量下载', desc: '一次粘贴多个链接，队列自动处理', soon: true },
   { title: '字幕翻译', desc: '提取字幕并一键翻译成中文', soon: true },
-  { title: 'AI 视频总结', desc: '长视频秒变要点，学习效率翻倍', soon: false },
 ]
 
-type Props = {
+type ModalProps = {
   open: boolean
   onClose: () => void
+  user: AuthUser
+  onNeedLogin: () => void
+  onCheckout: () => Promise<void>
+  onPortal: () => Promise<void>
 }
 
-export function ProModal({ open, onClose }: Props) {
+export function ProModal({
+  open,
+  onClose,
+  user,
+  onNeedLogin,
+  onCheckout,
+  onPortal,
+}: ModalProps) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
   if (!open) return null
+
+  async function handlePrimary() {
+    setError(null)
+    if (!user.authenticated) {
+      onClose()
+      onNeedLogin()
+      return
+    }
+    if (user.is_vip) {
+      setBusy(true)
+      try {
+        await onPortal()
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '打开订阅管理失败')
+        setBusy(false)
+      }
+      return
+    }
+    setBusy(true)
+    try {
+      await onCheckout()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '创建支付失败')
+      setBusy(false)
+    }
+  }
+
+  const primaryLabel = !user.authenticated
+    ? '登录后购买'
+    : user.is_vip
+      ? '管理订阅'
+      : busy
+        ? '跳转支付中…'
+        : '立即升级 Pro'
+
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4 backdrop-blur-sm"
@@ -25,13 +77,21 @@ export function ProModal({ open, onClose }: Props) {
       >
         <h3 className="font-display text-xl font-bold text-ink">升级极速下 Pro</h3>
         <p className="mt-2 text-sm text-muted">
-          支持开发者持续更新。正式上线后，第一批用户可享专属优惠。
+          月度订阅，到期自动续费；可随时在「管理订阅」中取消。当前 Pro 权益：
+          <strong className="font-medium text-ink">解析 + AI 总结无限次</strong>
+          （免费各每日 10 次）。
         </p>
         <ul className="mt-4 space-y-2 text-sm text-ink">
-          <li>· 无限次数解析与更高下载并发</li>
-          <li>· 批量下载队列（即将开放）</li>
-          <li>· AI 视频总结已可用；字幕翻译即将开放</li>
+          <li>· 视频解析无限次（免费每日 10 次）</li>
+          <li>· AI 视频总结无限次（免费每日 10 次）</li>
+          <li>· 批量下载、字幕翻译即将开放</li>
         </ul>
+        {user.is_vip && (
+          <p className="mt-3 rounded-xl bg-brand/5 px-3 py-2 text-sm text-brand">
+            你已是 Pro 会员，权益已生效。
+          </p>
+        )}
+        {error && <p className="mt-3 text-sm text-red-600">{error}</p>}
         <div className="mt-6 flex gap-3">
           <button
             type="button"
@@ -42,10 +102,11 @@ export function ProModal({ open, onClose }: Props) {
           </button>
           <button
             type="button"
-            onClick={onClose}
-            className="flex-1 rounded-full bg-brand py-2.5 text-sm font-medium text-white hover:bg-brand-dark"
+            disabled={busy}
+            onClick={() => void handlePrimary()}
+            className="flex-1 rounded-full bg-brand py-2.5 text-sm font-medium text-white hover:bg-brand-dark disabled:opacity-60"
           >
-            已登记兴趣
+            {primaryLabel}
           </button>
         </div>
       </div>
@@ -58,10 +119,10 @@ export function ProSection({ onProClick }: { onProClick: () => void }) {
     <section id="pro" className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:pb-20">
       <div className="rounded-3xl border border-brand/15 bg-gradient-to-br from-white via-white to-brand/5 px-6 py-10 text-center sm:px-12">
         <h2 className="font-display text-2xl font-bold text-ink sm:text-3xl">
-          下载还不够，值得升级 Pro
+          解析 + AI 总结无限次，升级 Pro
         </h2>
         <p className="mx-auto mt-2 max-w-xl text-muted">
-          从存档到高效学习：Pro 将下载体验与学习效率一并提升。
+          免费用户每日各 10 次；超出需升级 Pro 解锁无限配额。
         </p>
         <div className="mt-8 grid gap-4 text-left sm:grid-cols-2 lg:grid-cols-4">
           {FEATURES.map((f) => (
@@ -88,7 +149,7 @@ export function ProSection({ onProClick }: { onProClick: () => void }) {
           onClick={onProClick}
           className="mt-8 rounded-full bg-brand px-8 py-3 text-sm font-semibold text-white hover:bg-brand-dark"
         >
-          了解 Pro 权益
+          升级 Pro
         </button>
       </div>
     </section>

@@ -10,11 +10,13 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from .auth_service import get_optional_user
 from .limiter import rate_limiter
 from .llm_service import llm_configured
+from .membership import is_vip_user
 from .summary_config import FREE_DAILY_SUMMARIES, MAX_SUMMARY_CHARS
 from .summary_jobs import ask_job, ask_job_stream, create_job, get_job
-from .summary_quota import summary_quota
+from .summary_quota import consume_summary_quota, remaining_for_ip, remaining_for_user
 from .subtitle_service import export_subtitles, fetch_subtitles
 from .ytdlp_service import YtdlpError, validate_url
 
@@ -47,10 +49,20 @@ def _client_ip(request: Request) -> str:
 
 
 @router.get("/api/summary/meta")
-def summary_meta():
+def summary_meta(request: Request):
+    user = get_optional_user(request)
+    vip = bool(user and is_vip_user(int(user["id"])))
+    if vip:
+        remaining = None
+    elif user:
+        remaining = remaining_for_user(int(user["id"]))
+    else:
+        remaining = remaining_for_ip(_client_ip(request))
     return {
         "llm_configured": llm_configured(),
         "free_daily_summaries": FREE_DAILY_SUMMARIES,
+        "remaining_summaries": remaining,
+        "is_vip": vip,
         "provider_hint": "deepseek",
     }
 
@@ -65,10 +77,11 @@ def api_summarize(body: SummarizeBody, request: Request):
             "请设置环境变量后重启后端。",
             status_code=503,
         )
-    remaining = summary_quota.check_and_consume(ip)
+    user = get_optional_user(request)
+    remaining = consume_summary_quota(user=user, ip=ip)
     url = validate_url(body.url)
     job_id = create_job(url)
-    return {"job_id": job_id, "remaining_summaries": remaining}
+    return {"job_id": job_id, "remaining_summaries": remaining, "is_vip": remaining is None}
 
 
 @router.post("/api/subtitles")

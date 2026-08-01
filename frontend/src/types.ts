@@ -18,7 +18,8 @@ export type VideoInfo = {
   uploader: string | null
   webpage_url: string
   formats: VideoFormat[]
-  remaining_parses?: number
+  remaining_parses?: number | null
+  is_vip?: boolean
 }
 
 export type HealthInfo = {

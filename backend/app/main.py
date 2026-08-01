@@ -10,9 +10,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
+from .auth_router import router as auth_router
+from .auth_service import get_optional_user
+from .billing_router import router as billing_router
 from .cleanup import remove_dir, start_cleanup_loop
 from .config import FREE_DAILY_PARSES
+from .db import init_db
 from .limiter import RateLimitError, download_semaphore, rate_limiter
+from .membership import is_vip_user
+from .settings import PUBLIC_APP_URL
 from .summary_router import router as summary_router
 from .ytdlp_service import (
     YtdlpError,
@@ -27,16 +33,27 @@ from .ytdlp_service import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="极速下 API", version="0.1.0")
+app = FastAPI(title="极速下 API", version="0.2.0")
 
+_cors_origins = list(
+    dict.fromkeys(
+        [
+            PUBLIC_APP_URL,
+            "http://127.0.0.1:5173",
+            "http://localhost:5173",
+        ]
+    )
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
+app.include_router(billing_router)
 # AI summary extension (OCP mount)
 app.include_router(summary_router)
 
@@ -61,11 +78,13 @@ def _client_ip(request):
 
 @app.on_event("startup")
 def on_startup():
+    init_db()
     start_cleanup_loop()
     logger.info(
-        "cleanup loop started; yt-dlp=%s ffmpeg=%s",
+        "cleanup loop started; yt-dlp=%s ffmpeg=%s db=%s",
         ytdlp_version(),
         ffmpeg_available(),
+        "ok",
     )
 
 
@@ -94,10 +113,15 @@ def health():
 def api_info(body: UrlBody, request: Request):
     ip = _client_ip(request)
     rate_limiter.check_rate(ip)
-    remaining = rate_limiter.check_daily_parse(ip)
+    user = get_optional_user(request)
+    if user and is_vip_user(int(user["id"])):
+        remaining = None  # Pro: unlimited parses
+    else:
+        remaining = rate_limiter.check_daily_parse(ip)
     url = validate_url(body.url)
     info = extract_info(url)
     info["remaining_parses"] = remaining
+    info["is_vip"] = remaining is None
     return info
 
 

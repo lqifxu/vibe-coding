@@ -19,6 +19,7 @@ export async function fetchHealth(): Promise<HealthInfo> {
 export async function fetchInfo(url: string): Promise<VideoInfo> {
   const res = await fetch('/api/info', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   })
@@ -29,6 +30,7 @@ export async function fetchInfo(url: string): Promise<VideoInfo> {
 export async function downloadVideo(url: string, formatId: string): Promise<void> {
   const res = await fetch('/api/download', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url, format_id: formatId }),
   })

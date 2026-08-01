@@ -1,5 +1,7 @@
 backend/.venv/
 backend/temp/
+backend/data/
+
 __pycache__/
 *.pyc
 frontend/node_modules/

@@ -64,6 +64,8 @@ export type SummaryJob = {
 export type SummaryMeta = {
   llm_configured: boolean
   free_daily_summaries: number
+  remaining_summaries?: number | null
+  is_vip?: boolean
   provider_hint?: string
 }
 

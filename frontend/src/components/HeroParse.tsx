@@ -1,7 +1,7 @@
 type Props = {
   url: string
   loading: boolean
-  remaining: number | null
+  remaining: number | null | undefined
   onUrlChange: (v: string) => void
   onSubmit: () => void
 }
@@ -59,10 +59,11 @@ export function HeroParse({ url, loading, remaining, onUrlChange, onSubmit }: Pr
       </form>
 
       <p className="mt-3 text-xs text-muted sm:text-sm">
-        免费解析
-        {remaining !== null ? ` · 今日剩余 ${remaining} 次` : ''}
+        {remaining === null
+          ? 'Pro · 解析无限次'
+          : `免费解析 · 今日剩余 ${remaining ?? 10} 次`}
         {' · '}
-        <span className="text-brand">Pro 无限次 / 批量 / 更高清</span>
+        <span className="text-brand">超出请升级 Pro</span>
       </p>
       <p className="mt-2 text-xs leading-relaxed text-muted/90 sm:text-sm">
         抖音可用「分享口令」、/video/数字ID，或地址栏带 modal_id= 的链接；不要复制无 ID 的推荐页

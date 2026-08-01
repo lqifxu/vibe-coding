@@ -11,16 +11,17 @@ async function readError(res: Response): Promise<string> {
 }
 
 export async function fetchSummaryMeta(): Promise<SummaryMeta> {
-  const res = await fetch('/api/summary/meta')
+  const res = await fetch('/api/summary/meta', { credentials: 'include' })
   if (!res.ok) throw new Error(await readError(res))
   return res.json()
 }
 
 export async function startSummarize(
   url: string,
-): Promise<{ job_id: string; remaining_summaries: number }> {
+): Promise<{ job_id: string; remaining_summaries: number | null; is_vip?: boolean }> {
   const res = await fetch('/api/summarize', {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ url }),
   })
@@ -78,6 +79,7 @@ export async function askAboutVideo(
 ): Promise<string> {
   const res = await fetch(`/api/summarize/${encodeURIComponent(jobId)}/ask`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
   })
@@ -126,6 +128,7 @@ export async function askAboutVideoStream(
 ): Promise<void> {
   const res = await fetch(`/api/summarize/${encodeURIComponent(jobId)}/ask/stream`, {
     method: 'POST',
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ question }),
     signal,
