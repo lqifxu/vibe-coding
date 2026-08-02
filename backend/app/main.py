@@ -100,12 +100,17 @@ async def rate_limit_handler(_request, exc):
 
 @app.get("/api/health")
 def health():
+    from .asr_service import asr_api_configured, asr_available, asr_provider
+
     return {
         "ok": True,
         "yt_dlp": ytdlp_version(),
         "ffmpeg": ffmpeg_available(),
         "ffmpeg_detail": check_ffmpeg_cli(),
         "free_daily_parses": FREE_DAILY_PARSES,
+        "asr": asr_available(),
+        "asr_provider": asr_provider(),
+        "asr_api": asr_api_configured(),
     }
 
 

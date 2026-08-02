@@ -128,12 +128,20 @@ def api_summarize_status(job_id: str):
 
 @router.get("/api/summarize/{job_id}/events")
 def api_summarize_events(job_id: str):
-    """SSE: push job snapshots while summarizing (for streaming UI)."""
+    """SSE: push job snapshots while summarizing (for streaming UI).
+
+    Douyin ASR can sit in ``fetching_subtitles`` for minutes with an unchanged
+    payload. Use a wall-clock deadline (not a short unchanged-payload idle
+    counter) so long-running jobs are not reported as ``等待超时``.
+    """
 
     def event_stream():
         last = None
-        idle = 0
-        while idle < 180:
+        # Keepalive comment every ~15s so proxies/browsers do not drop the stream
+        # while status stays on fetching_subtitles / summarizing.
+        deadline = time.time() + 300  # 5 minutes
+        last_ping = time.time()
+        while time.time() < deadline:
             job = get_job(job_id)
             if not job:
                 yield "event: error\ndata: {}\n\n".format(
@@ -152,16 +160,25 @@ def api_summarize_events(job_id: str):
             if blob != last:
                 last = blob
                 yield "event: update\ndata: {}\n\n".format(blob)
-                idle = 0
-            else:
-                idle += 1
+            elif time.time() - last_ping >= 15:
+                # SSE comment — does not change UI, resets proxy idle timers
+                yield ": keepalive\n\n"
+                last_ping = time.time()
             if job["status"] in ("done", "failed"):
                 yield "event: end\ndata: {}\n\n".format(blob)
                 return
-            time.sleep(0.12)
+            time.sleep(0.5)
 
+        # Still running after deadline: soft signal (frontend should keep polling)
         yield "event: error\ndata: {}\n\n".format(
-            json.dumps({"detail": "等待超时"}, ensure_ascii=False)
+            json.dumps(
+                {
+                    "detail": "任务仍在后台处理，可继续刷新或凭 job_id 恢复查询",
+                    "job_id": job_id,
+                    "soft_timeout": True,
+                },
+                ensure_ascii=False,
+            )
         )
 
     return StreamingResponse(

@@ -14,7 +14,7 @@ export function HeroParse({ url, loading, remaining, onUrlChange, onSubmit }: Pr
         万能视频下载与 AI 总结，一键保存到本地
       </h1>
       <p className="animate-fade-up-delay mt-4 text-base text-muted sm:text-lg">
-        视频链接解析 · B站 / 抖音下载 · 字幕下载 · AI 视频总结，手机电脑都能用
+        视频链接解析 · 抖音 / YouTube 优先 · 字幕下载 · AI 视频总结，手机电脑都能用
       </p>
 
       <form
@@ -39,7 +39,7 @@ export function HeroParse({ url, loading, remaining, onUrlChange, onSubmit }: Pr
           <input
             value={url}
             onChange={(e) => onUrlChange(e.target.value)}
-            placeholder="粘贴抖音分享口令或完整视频链接"
+            placeholder="推荐粘贴抖音分享口令，或 YouTube / 小红书等完整链接"
             className="w-full border-0 bg-transparent py-2 text-sm text-ink outline-none placeholder:text-muted/70 sm:text-base"
             autoComplete="off"
             spellCheck={false}
@@ -66,8 +66,7 @@ export function HeroParse({ url, loading, remaining, onUrlChange, onSubmit }: Pr
         <span className="text-brand">超出请升级 Pro</span>
       </p>
       <p className="mt-2 text-xs leading-relaxed text-muted/90 sm:text-sm">
-        抖音可用「分享口令」、/video/数字ID，或地址栏带 modal_id= 的链接；不要复制无 ID 的推荐页
-        （如 <code className="rounded bg-surface px-1">/?recommend=1</code>）。无需登录、无需 Cookie。
+        支持 B站、抖音（分享口令 / 含视频 ID 的链接）、YouTube 等。抖音无需登录。
       </p>
     </section>
   )

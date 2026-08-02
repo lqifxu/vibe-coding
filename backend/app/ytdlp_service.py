@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -13,9 +14,15 @@ from urllib.parse import urlparse
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
 
-from .config import FFMPEG_DIR, MAX_DOWNLOAD_BYTES, TEMP_DIR
+from .config import BASE_DIR, FFMPEG_DIR, MAX_DOWNLOAD_BYTES, TEMP_DIR
 from .cleanup import remove_dir
 from .demo_fixture import demo_video_info, is_demo_summary_url
+from .bilibili_service import (
+    BilibiliError,
+    download_bilibili,
+    fetch_bilibili_info,
+    is_bilibili_url,
+)
 from .douyin_service import (
     DouyinError,
     download_douyin,
@@ -62,6 +69,33 @@ class YtdlpError(Exception):
         self.status_code = status_code
 
 
+def _bili_cookie_header() -> str:
+    raw = (
+        os.getenv("BILI_COOKIE", "").strip()
+        or os.getenv("BILIBILI_COOKIE", "").strip()
+    )
+    if raw:
+        return raw
+    sess = os.getenv("SESSDATA", "").strip()
+    if not sess:
+        return ""
+    if sess.lower().startswith("sessdata="):
+        return sess
+    return "SESSDATA={}".format(sess)
+
+
+def _cookiefile_path() -> Optional[str]:
+    """Optional Netscape cookies.txt for yt-dlp (all platforms)."""
+    env = os.getenv("YTDLP_COOKIES_FILE", "").strip()
+    if env and Path(env).is_file():
+        return env
+    for name in ("cookies.txt", "bilibili_cookies.txt"):
+        cand = BASE_DIR / name
+        if cand.is_file():
+            return str(cand)
+    return None
+
+
 def _base_opts():
     opts = {
         "quiet": True,
@@ -73,11 +107,18 @@ def _base_opts():
         "http_headers": {
             "User-Agent": _DESKTOP_UA,
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Referer": "https://www.bilibili.com/",
         },
     }
     ffdir = get_ffmpeg_dir()
     if ffdir:
         opts["ffmpeg_location"] = ffdir
+    cookiefile = _cookiefile_path()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+    bili_cookie = _bili_cookie_header()
+    if bili_cookie:
+        opts["http_headers"]["Cookie"] = bili_cookie
     return opts
 
 
@@ -296,6 +337,22 @@ def validate_url(url):
     return extracted
 
 
+def _friendly_extract_error(url: str, exc: BaseException) -> str:
+    msg = str(exc)
+    low = msg.lower()
+    if is_bilibili_url(url) or "bilibili" in low:
+        if "412" in msg or "precondition" in low or "http error 412" in low:
+            return (
+                "B站当前对云服务器访问限制较严（风控 412），网页版暂不稳定。"
+                "请优先试试抖音分享口令或 YouTube 链接；B站建议用电脑浏览器本地工具下载。"
+            )
+        return (
+            "暂时无法解析该 B站视频（可能需登录或触发平台风控）。"
+            "请改用抖音 / YouTube 等链接，或稍后再试。"
+        )
+    return "无法解析该视频。链接可能无效、需登录，或平台暂不支持。"
+
+
 def extract_info(url):
     if is_demo_summary_url(url):
         return demo_video_info()
@@ -308,6 +365,14 @@ def extract_info(url):
         except DouyinError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
 
+    if is_bilibili_url(url):
+        try:
+            info = fetch_bilibili_info(url)
+            info.pop("_bilibili_play", None)
+            return info
+        except BilibiliError as exc:
+            raise YtdlpError(exc.message, status_code=exc.status_code) from exc
+
     opts = _base_opts()
     opts["skip_download"] = True
     try:
@@ -315,10 +380,7 @@ def extract_info(url):
             info = ydl.extract_info(url, download=False)
     except (DownloadError, ExtractorError) as exc:
         logger.warning("extract_info failed: %s", exc)
-        raise YtdlpError(
-            "无法解析该视频。链接可能无效、需登录，或平台暂不支持。",
-            status_code=422,
-        )
+        raise YtdlpError(_friendly_extract_error(url, exc), status_code=422)
     except Exception as exc:
         logger.exception("unexpected extract error")
         raise YtdlpError("解析失败：{}".format(exc), status_code=500)
@@ -349,6 +411,12 @@ def download_video(url, format_id):
         try:
             return download_douyin(url)
         except DouyinError as exc:
+            raise YtdlpError(exc.message, status_code=exc.status_code) from exc
+
+    if is_bilibili_url(url):
+        try:
+            return download_bilibili(url, format_id)
+        except BilibiliError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
 
     job_dir = TEMP_DIR / str(uuid.uuid4())

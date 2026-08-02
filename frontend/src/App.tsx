@@ -147,6 +147,11 @@ export default function App() {
                   查看 Pro
                 </button>
               )}
+              {(error.includes('B站') || error.includes('Bilibili') || error.includes('bilibili')) && (
+                <p className="mt-2 text-xs leading-relaxed text-red-600/90">
+                  请确认是投稿视频链接（含 BV 号）。番剧 EP 暂不支持；若仍失败可稍后再试或改用抖音 / YouTube。
+                </p>
+              )}
             </div>
           </div>
         )}

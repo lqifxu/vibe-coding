@@ -26,6 +26,7 @@ def _load_dotenv() -> None:
                 or key.startswith("STRIPE_")
                 or key.startswith("DATABASE_")
                 or key.startswith("FREE_DAILY_")
+                or key.startswith("ASR_")
                 or key == "PUBLIC_APP_URL"
                 or key == "COOKIE_SECURE"
             )

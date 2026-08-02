@@ -41,7 +41,7 @@ const TABS: { id: TabId; label: string }[] = [
 ]
 
 function stageLabel(stage: SummaryJob['stage'] | null): string {
-  if (stage === 'fetching_subtitles') return '正在提取字幕…'
+  if (stage === 'fetching_subtitles') return '正在提取字幕 / 语音转写…'
   if (stage === 'summarizing') return '正在生成 AI 总结…'
   return '任务排队中…'
 }

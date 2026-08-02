@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   askAboutVideoStream,
+  fetchSummarizeStatus,
   fetchSummaryMeta,
+  loadPersistedSummaryJobId,
+  persistSummaryJobId,
   startSummarize,
   subscribeSummarizeEvents,
 } from './summaryApi'
@@ -25,6 +28,30 @@ export function useVideoSummary() {
   const unsubRef = useRef<(() => void) | null>(null)
   const askAbortRef = useRef<AbortController | null>(null)
 
+  const clearSub = useCallback(() => {
+    unsubRef.current?.()
+    unsubRef.current = null
+  }, [])
+
+  const applyJob = useCallback(
+    (job: SummaryJob) => {
+      setSummaryStage(job.stage ?? null)
+      if (job.stream_markdown) setStreamMarkdown(job.stream_markdown)
+      if (job.result) setSummaryResult(job.result)
+      if (job.status === 'done') {
+        setSummarizing(false)
+        setSummaryError(null)
+        persistSummaryJobId(job.job_id || null)
+        clearSub()
+      } else if (job.status === 'failed') {
+        setSummarizing(false)
+        setSummaryError(job.error || '总结失败')
+        clearSub()
+      }
+    },
+    [clearSub],
+  )
+
   useEffect(() => {
     fetchSummaryMeta()
       .then((m) => {
@@ -43,14 +70,47 @@ export function useVideoSummary() {
     }
   }, [])
 
-  const clearSub = useCallback(() => {
-    unsubRef.current?.()
-    unsubRef.current = null
-  }, [])
+  // Restore in-flight / finished job after refresh (Douyin may outlive a tab).
+  useEffect(() => {
+    const saved = loadPersistedSummaryJobId()
+    if (!saved) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const job = await fetchSummarizeStatus(saved)
+        if (cancelled) return
+        setJobId(saved)
+        applyJob(job)
+        if (job.status === 'queued' || job.status === 'running') {
+          setSummarizing(true)
+          clearSub()
+          unsubRef.current = subscribeSummarizeEvents(saved, {
+            onUpdate: applyJob,
+            onError: (msg, meta) => {
+              if (meta?.softTimeout) {
+                setSummaryError(`${msg}（任务 ID：${meta.jobId || saved}）`)
+                setSummarizing(true)
+                return
+              }
+              setSummarizing(false)
+              setSummaryError(msg)
+              clearSub()
+            },
+          })
+        }
+      } catch {
+        persistSummaryJobId(null)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [applyJob, clearSub])
 
   const resetSummary = useCallback(() => {
     clearSub()
     askAbortRef.current?.abort()
+    persistSummaryJobId(null)
     setSummarizing(false)
     setSummaryStage(null)
     setSummaryResult(null)
@@ -59,21 +119,6 @@ export function useVideoSummary() {
     setStreamMarkdown('')
     setQaMessages([])
     setQaLoading(false)
-  }, [clearSub])
-
-  const applyJob = useCallback((job: SummaryJob) => {
-    setSummaryStage(job.stage ?? null)
-    if (job.stream_markdown) setStreamMarkdown(job.stream_markdown)
-    if (job.result) setSummaryResult(job.result)
-    if (job.status === 'done') {
-      setSummarizing(false)
-      setSummaryError(null)
-      clearSub()
-    } else if (job.status === 'failed') {
-      setSummarizing(false)
-      setSummaryError(job.error || '总结失败')
-      clearSub()
-    }
   }, [clearSub])
 
   const runSummarize = useCallback(
@@ -95,6 +140,7 @@ export function useVideoSummary() {
       try {
         const started = await startSummarize(url)
         setJobId(started.job_id)
+        persistSummaryJobId(started.job_id)
         if (started.is_vip || started.remaining_summaries === null) {
           setIsVip(true)
           setRemainingSummaries(null)
@@ -104,7 +150,11 @@ export function useVideoSummary() {
         }
         unsubRef.current = subscribeSummarizeEvents(started.job_id, {
           onUpdate: applyJob,
-          onError: (msg) => {
+          onError: (msg, meta) => {
+            if (meta?.softTimeout) {
+              setSummaryError(`${msg}（任务 ID：${meta.jobId || started.job_id}）`)
+              return
+            }
             setSummarizing(false)
             setSummaryError(msg)
             clearSub()

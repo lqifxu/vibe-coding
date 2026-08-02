@@ -11,8 +11,11 @@ from urllib.request import Request, urlopen
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError, ExtractorError
 
+from .asr_service import asr_available, transcribe_media
+from .bilibili_service import is_bilibili_url
+from .cleanup import remove_dir
 from .demo_fixture import demo_subtitles, is_demo_summary_url
-from .douyin_service import is_douyin_url
+from .douyin_service import download_douyin, fetch_douyin_info, is_douyin_url
 from .ytdlp_service import YtdlpError, _base_opts
 
 logger = logging.getLogger(__name__)
@@ -389,13 +392,66 @@ def _fetch_bilibili_subtitles(url: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _pack_bilibili_subtitles(url: str, max_chars: int) -> Optional[Dict[str, Any]]:
+    bili = _fetch_bilibili_subtitles(url)
+    if not bili:
+        return None
+    transcript = cues_to_transcript(bili["cues"], max_chars)
+    return {
+        "title": bili["title"],
+        "language": bili["language"],
+        "source": bili["source"],
+        "cues": bili["cues"],
+        "transcript": transcript,
+        "webpage_url": bili.get("webpage_url") or url,
+    }
+
+
+def _fetch_douyin_subtitles_via_asr(url: str, max_chars: int) -> Dict[str, Any]:
+    """Download Douyin media and speech-to-text (no official caption track)."""
+    if not asr_available():
+        raise YtdlpError(
+            "抖音无字幕轨，需要云端语音转写才能总结。"
+            "未配置云端 ASR：请设置 ASR_PROVIDER=api 与 ASR_API_KEY。",
+            status_code=503,
+        )
+    info = fetch_douyin_info(url)
+    media = download_douyin(url)
+    job_dir = media.parent
+    try:
+        asr = transcribe_media(media)
+    finally:
+        remove_dir(job_dir)
+
+    cues = asr.get("cues") or []
+    if not cues:
+        raise YtdlpError("语音转写结果为空，无法生成总结。", status_code=422)
+    transcript = cues_to_transcript(cues, max_chars)
+    return {
+        "title": info.get("title") or "抖音视频",
+        "language": asr.get("language") or "zh",
+        "source": "asr",
+        "cues": cues,
+        "transcript": transcript,
+        "webpage_url": info.get("webpage_url") or url,
+        "asr_engine": asr.get("engine"),
+    }
+
+
 def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
     """Return title / language / source / cues / transcript for a video URL."""
     if is_demo_summary_url(url):
         return demo_subtitles(max_chars)
     if is_douyin_url(url):
+        return _fetch_douyin_subtitles_via_asr(url, max_chars)
+
+    # B站：云服务器访问网页常 412，直接走公开字幕 API（含 AI 字幕）
+    if is_bilibili_url(url):
+        packed = _pack_bilibili_subtitles(url, max_chars)
+        if packed:
+            return packed
         raise YtdlpError(
-            "当前版本暂不支持对该平台获取字幕（缺少可用字幕链路）。请使用带字幕的 B 站 / YouTube 等链接。",
+            "该 B站视频没有可用字幕（含 AI 字幕）。当前不对 B站做整片语音转写。",
             status_code=422,
         )
 
@@ -413,6 +469,9 @@ def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
             info = ydl.extract_info(url, download=False)
     except (DownloadError, ExtractorError) as exc:
         logger.warning("subtitle extract_info failed: %s", exc)
+        packed = _pack_bilibili_subtitles(url, max_chars)
+        if packed:
+            return packed
         raise YtdlpError("无法解析视频以获取字幕，请检查链接是否有效。", status_code=422)
     except Exception as exc:
         logger.exception("unexpected subtitle extract error")
@@ -438,17 +497,9 @@ def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
         source = "auto"
 
     if not picked:
-        bili = _fetch_bilibili_subtitles(url)
-        if bili:
-            transcript = cues_to_transcript(bili["cues"], max_chars)
-            return {
-                "title": bili["title"],
-                "language": bili["language"],
-                "source": bili["source"],
-                "cues": bili["cues"],
-                "transcript": transcript,
-                "webpage_url": bili.get("webpage_url") or url,
-            }
+        packed = _pack_bilibili_subtitles(url, max_chars)
+        if packed:
+            return packed
         raise YtdlpError(
             "该视频没有可用字幕。v1 仅支持已有字幕/自动字幕的视频，暂不提供语音转写。",
             status_code=422,

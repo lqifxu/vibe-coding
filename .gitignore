@@ -1,6 +1,10 @@
 backend/.venv/
 backend/temp/
 backend/data/
+deploy/.env
+deploy/data/
+deploy/temp/
+
 
 __pycache__/
 *.pyc

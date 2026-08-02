@@ -21,7 +21,18 @@ def _load_dotenv() -> None:
             if not key:
                 continue
             # Always apply from .env for LLM/summary keys so local .env wins
-            if key.startswith("LLM_") or key.startswith("DEEPSEEK_") or key.startswith("FREE_DAILY_SUMMARIES") or key.startswith("SUMMARY_") or key.startswith("MAX_SUMMARY") or key.startswith("MAX_CONCURRENT_SUMMARIES") or key.startswith("BILI_") or key.startswith("BILIBILI_") or key == "SESSDATA":
+            if (
+                key.startswith("LLM_")
+                or key.startswith("DEEPSEEK_")
+                or key.startswith("FREE_DAILY_SUMMARIES")
+                or key.startswith("SUMMARY_")
+                or key.startswith("MAX_SUMMARY")
+                or key.startswith("MAX_CONCURRENT_SUMMARIES")
+                or key.startswith("BILI_")
+                or key.startswith("BILIBILI_")
+                or key.startswith("ASR_")
+                or key == "SESSDATA"
+            ):
                 os.environ[key] = val
             elif key not in os.environ or not str(os.environ.get(key, "")).strip():
                 os.environ[key] = val

@@ -1,13 +1,14 @@
 # 极速下 — 万能视频下载网站
 
 粘贴视频链接或分享口令 → 解析清晰度 → 下载到本地（手机 / 电脑均可）。  
-同页支持 **AI 视频总结**（字幕 → 流式摘要 / 大纲 / 要点 / 总结 + 字幕文本 + 思维导图图片 + AI 问答）。
+同页支持 **AI 视频总结**（字幕或抖音云端 ASR → 流式摘要 / 大纲 / 要点 / 总结 + 字幕文本 + 思维导图图片 + AI 问答）。
 
-下载引擎基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp)；抖音走独立无 Cookie 分享页解析。账号与 Pro 订阅使用本地 SQLite + Stripe。
+下载引擎基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp)；抖音走独立无 Cookie 分享页解析，无字幕时用 **OpenAI 兼容 Whisper API** 转写后再总结。账号与 Pro 订阅使用本地 SQLite + Stripe。
 
 更完整的设计取舍与验收记录见：[docs/项目总结.md](docs/项目总结.md)  
 AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方案.md)  
-会员与 Stripe 见：[docs/会员与Stripe支付.md](docs/会员与Stripe支付.md)
+会员与 Stripe 见：[docs/会员与Stripe支付.md](docs/会员与Stripe支付.md)  
+上线部署见：[docs/部署上线.md](docs/部署上线.md)（Docker Compose）
 
 ## 功能
 
@@ -29,6 +30,7 @@ AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方
 - **Node.js 18+**
 - **ffmpeg**（强烈建议；高清音视频合并需要）
 - **LLM 密钥**（AI 总结需要；默认对接 DeepSeek）
+- **ASR 密钥**（抖音 AI 总结需要；OpenAI 兼容网关，如 SiliconFlow；见 `backend/.env.example`）
 
 ## 快速启动
 
@@ -45,14 +47,14 @@ py -3.12 -m venv .venv
 
 pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 
-# 复制并编辑环境变量（至少配置 LLM 密钥；测支付再配 Stripe）
+# 复制并编辑环境变量（至少配置 LLM；抖音总结再配 ASR_*；测支付再配 Stripe）
 copy .env.example .env   # Windows
 # cp .env.example .env   # macOS / Linux
 
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
-健康检查：<http://127.0.0.1:8001/api/health>  
+健康检查：<http://127.0.0.1:8001/api/health>（含 `asr` / `asr_api`）  
 总结元信息：<http://127.0.0.1:8001/api/summary/meta>  
 当前用户：<http://127.0.0.1:8001/api/auth/me>
 

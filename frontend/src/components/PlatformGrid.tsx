@@ -6,16 +6,16 @@ const PLATFORMS = [
     letter: 'YT',
   },
   {
-    name: 'Bilibili',
-    tags: ['#1080P', '#番剧', '#UP主'],
-    gradient: 'from-pink-400 to-pink-600',
-    letter: 'B',
-  },
-  {
     name: '抖音 / TikTok',
-    tags: ['#竖屏', '#无水印', '#短视频'],
+    tags: ['#竖屏', '#推荐', '#短视频'],
     gradient: 'from-slate-800 to-slate-950',
     letter: '抖',
+  },
+  {
+    name: 'Bilibili',
+    tags: ['#投稿视频', '#多清晰度', '#UP主'],
+    gradient: 'from-pink-400 to-pink-600',
+    letter: 'B',
   },
   {
     name: '小红书',
@@ -43,7 +43,7 @@ export function PlatformGrid() {
       <div className="mb-8 text-center">
         <h2 className="font-display text-2xl font-bold text-ink sm:text-3xl">支持主流平台视频下载</h2>
         <p className="mx-auto mt-2 max-w-2xl text-muted">
-          覆盖 B站视频下载、抖音视频下载、YouTube 等主流站点；站在 yt-dlp 肩膀上持续扩展更多来源。
+          覆盖 B站、抖音、YouTube、小红书等常见平台；个别链接若失败可换一条再试。
           是否可解析、可用清晰度与字幕，以源站实际能力为准。
         </p>
       </div>

@@ -1,5 +1,10 @@
 import type { SummaryJob, SummaryMeta } from './summaryTypes'
 
+const JOB_STORAGE_KEY = 'jisuxia_summary_job_id'
+/** Max time to poll after SSE soft-timeout / disconnect while job still running. */
+export const SUMMARY_POLL_MAX_MS = 5 * 60 * 1000
+export const SUMMARY_POLL_INTERVAL_MS = 2000
+
 async function readError(res: Response): Promise<string> {
   try {
     const data = await res.json()
@@ -7,6 +12,23 @@ async function readError(res: Response): Promise<string> {
     return JSON.stringify(data)
   } catch {
     return res.statusText || '请求失败'
+  }
+}
+
+export function persistSummaryJobId(jobId: string | null): void {
+  try {
+    if (jobId) sessionStorage.setItem(JOB_STORAGE_KEY, jobId)
+    else sessionStorage.removeItem(JOB_STORAGE_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadPersistedSummaryJobId(): string | null {
+  try {
+    return sessionStorage.getItem(JOB_STORAGE_KEY)
+  } catch {
+    return null
   }
 }
 
@@ -30,47 +52,137 @@ export async function startSummarize(
 }
 
 export async function fetchSummarizeStatus(jobId: string): Promise<SummaryJob> {
-  const res = await fetch(`/api/summarize/${encodeURIComponent(jobId)}`)
+  const res = await fetch(`/api/summarize/${encodeURIComponent(jobId)}`, {
+    credentials: 'include',
+  })
   if (!res.ok) throw new Error(await readError(res))
   return res.json()
 }
 
-/** Subscribe to SSE job updates. Returns an abort function. */
+type SubscribeHandlers = {
+  onUpdate: (job: SummaryJob) => void
+  onError?: (message: string, meta?: { softTimeout?: boolean; jobId?: string }) => void
+}
+
+/**
+ * Prefer SSE; if the stream ends with soft_timeout or drops while the job is
+ * still running/queued, fall back to GET polling for up to 5 minutes.
+ */
 export function subscribeSummarizeEvents(
   jobId: string,
-  handlers: {
-    onUpdate: (job: SummaryJob) => void
-    onError?: (message: string) => void
-  },
+  handlers: SubscribeHandlers,
 ): () => void {
-  const es = new EventSource(`/api/summarize/${encodeURIComponent(jobId)}/events`)
+  let closed = false
+  let es: EventSource | null = null
+  let pollTimer: ReturnType<typeof setTimeout> | null = null
+  const pollDeadline = Date.now() + SUMMARY_POLL_MAX_MS
+
+  const stop = () => {
+    closed = true
+    es?.close()
+    es = null
+    if (pollTimer != null) {
+      clearTimeout(pollTimer)
+      pollTimer = null
+    }
+  }
+
+  const schedulePoll = () => {
+    if (closed) return
+    if (Date.now() > pollDeadline) {
+      handlers.onError?.(
+        '任务仍在后台处理，可刷新页面或稍后凭任务恢复查询',
+        { softTimeout: true, jobId },
+      )
+      return
+    }
+    pollTimer = setTimeout(async () => {
+      if (closed) return
+      try {
+        const job = await fetchSummarizeStatus(jobId)
+        handlers.onUpdate(job)
+        if (job.status === 'done' || job.status === 'failed') {
+          stop()
+          return
+        }
+        // still queued/running — keep polling
+        schedulePoll()
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : '轮询失败'
+        handlers.onError?.(msg, { jobId })
+      }
+    }, SUMMARY_POLL_INTERVAL_MS)
+  }
+
+  const startPollingFallback = () => {
+    es?.close()
+    es = null
+    schedulePoll()
+  }
+
+  es = new EventSource(`/api/summarize/${encodeURIComponent(jobId)}/events`)
+
   const onUpdate = (ev: MessageEvent) => {
     try {
       const data = JSON.parse(ev.data) as SummaryJob
       handlers.onUpdate(data)
+      if (data.status === 'done' || data.status === 'failed') {
+        stop()
+      }
     } catch {
       /* ignore */
     }
   }
+
   const onErrEvent = (ev: MessageEvent) => {
-    try {
-      const data = JSON.parse(ev.data) as { detail?: string }
-      handlers.onError?.(data.detail || '流式更新失败')
-    } catch {
-      handlers.onError?.('流式更新失败')
+    // Named SSE `event: error` from server has JSON data; browser transport
+    // errors often have empty data — treat those as poll fallback, not UI failure.
+    if (ev.data) {
+      let soft = false
+      let detail = '流式更新中断'
+      try {
+        const data = JSON.parse(ev.data) as {
+          detail?: string
+          soft_timeout?: boolean
+          job_id?: string
+        }
+        detail = data.detail || detail
+        soft = !!data.soft_timeout || /后台处理|继续|超时/.test(detail)
+      } catch {
+        startPollingFallback()
+        return
+      }
+      es?.close()
+      es = null
+      if (soft) {
+        startPollingFallback()
+        return
+      }
+      handlers.onError?.(detail, { jobId })
+      stop()
+      return
     }
-    es.close()
+    if (es && es.readyState === EventSource.CLOSED) {
+      startPollingFallback()
+    }
   }
+
   es.addEventListener('update', onUpdate as EventListener)
   es.addEventListener('end', (ev) => {
     onUpdate(ev as MessageEvent)
-    es.close()
+    stop()
   })
   es.addEventListener('error', onErrEvent as EventListener)
   es.onerror = () => {
-    // EventSource reconnects; if permanently failed browser keeps retrying — caller may abort
+    // Only fall back when the browser permanently closed the stream.
+    // Transient onerror fires during normal EventSource reconnects.
+    if (closed || !es) return
+    if (es.readyState === EventSource.CLOSED) {
+      startPollingFallback()
+    }
   }
-  return () => es.close()
+
+  return stop
 }
 
 export async function askAboutVideo(

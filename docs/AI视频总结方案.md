@@ -22,13 +22,15 @@
 
 | 项 | 当前决定 |
 |---|---|
-| 文本源 | yt-dlp 字幕 / 自动字幕；**B 站优先走 `x/v2/dm/view` 拉 AI 字幕（通常免登录）**；可选 `BILI_COOKIE` |
-| 无字幕 | 友好报错；**不含 ASR** |
+| 文本源 | yt-dlp 字幕 / 自动字幕；**B 站优先走开放 API 拉 AI/人工字幕**（可选 `BILI_COOKIE`）；**抖音无字幕轨时走云端 ASR** |
+| 无字幕 | B 站/其它平台：友好报错；**抖音：下载音频 → 云端 OpenAI 兼容 Whisper → cues/transcript** |
+| ASR | 仅云端 API（`ASR_PROVIDER=api`）；**不加载本地 Whisper / faster-whisper** |
 | LLM | OpenAI 兼容（默认 DeepSeek：`LLM_BASE_URL` + `LLM_API_KEY`/`DEEPSEEK_API_KEY` + `LLM_MODEL`） |
-| 持久化 | 内存 Job + TTL；总结配额独立于下载解析配额 |
+| 持久化 | 内存 Job + TTL；总结配额独立于下载解析配额；前端 `sessionStorage` 可恢复 `job_id` |
 | 入口 | 解析成功后**自动总结**（需已配置 LLM）；失败可重试 /「重新总结」；与下载左右同屏（`VideoResultSection` + `SplitResultShell`） |
 | 展示约定 | `outline.start` 仅存数据；**总结摘要 / 思维导图 UI 不展示时间线** |
-| 不做（暂） | 本地上传视频、笔记同步到第三方 |
+| 长任务 | SSE 墙钟最长约 **5 分钟**；状态不变时发 keepalive；断流后前端 **GET 轮询**；勿将「仍在处理」展示为硬失败 |
+| 不做（暂） | 本地上传视频、本地 ASR 模型、笔记同步到第三方 |
 | 会员 | 免费每日总结 10 次；Pro（Stripe 月度）解锁解析 + AI 总结无限次；详见 [会员与Stripe支付.md](./会员与Stripe支付.md) |
 
 ## 流程
@@ -36,11 +38,15 @@
 ```
 用户已解析视频
   →（前端自动）POST /api/summarize { url }   # LLM 已配置时；无需再点「AI 总结」
-  → 限流 + 日总结配额 → 创建 job（queued）
+  → 限流 + 日总结配额 → 创建 job（queued）；前端持久化 job_id
   → 后台线程：
-       fetching_subtitles → 写入 cues / transcript（前端字幕 Tab 即可用）
+       fetching_subtitles
+         · B 站等：拉字幕轨
+         · 抖音：下载媒体 → ffmpeg 抽音频 → 云端 /v1/audio/transcriptions → cues
        summarizing → LLM 流式 Markdown → 解析为 partial result + mindmap
-  → 前端 EventSource GET /api/summarize/{id}/events（失败时可降级轮询 status）
+  → 前端 EventSource GET /api/summarize/{id}/events
+       · 墙钟约 5 分钟；payload 不变时 SSE comment keepalive
+       · 软超时 / 断流 → GET /api/summarize/{id} 轮询（最多约 5 分钟）
   → 左右同屏：左下载信息 / 右四 Tab（总结摘要 / 字幕 / 导图 / 问答）
   → POST /api/summarize/{id}/ask[/stream] 基于字幕问答
 
@@ -102,11 +108,13 @@
 
 | 文件 | 职责 |
 |---|---|
-| `summary_router.py` | 总结 / meta / SSE / 问答 / **字幕下载** 路由；`main.py` 仅 `include_router` |
-| `summary_config.py` | 加载 `.env`、DeepSeek 默认、总结配额等 |
+| `summary_router.py` | 总结 / meta / SSE / 问答 / **字幕下载** 路由；SSE 5 分钟墙钟 + keepalive |
+| `summary_config.py` | 加载 `.env`、DeepSeek / ASR 相关键、总结配额等 |
 | `summary_quota.py` | 每日总结次数（独立于下载 `limiter`） |
 | `summary_jobs.py` | 内存 Job、后台线程、流式 partial 合并、mindmap |
-| `subtitle_service.py` | yt-dlp + B 站 view/player/dm 回退、VTT/JSON 解析、`cues_to_srt/vtt` |
+| `subtitle_service.py` | yt-dlp + B 站 API 字幕；**抖音转 `asr_service`** |
+| `asr_service.py` | 云端 OpenAI 兼容 Whisper（`/audio/transcriptions`）；无本地模型导入 |
+| `bilibili_service.py` | B 站 view/playurl 解析与下载（规避部分环境 412） |
 | `llm_service.py` | 流式 Markdown 总结、解析、问答、mindmap 树构建与标签清洗 |
 | `demo_fixture.py` | 本地演示 URL `https://jisuxia.local/demo/ai-summary` |
 
@@ -119,17 +127,27 @@
 | `summary/SummaryPanel.tsx` | 四 Tab：文档式摘要、字幕导出、导图全屏、问答；支持 embedded 窄栏 |
 | `summary/mindmapRender.ts` | 彩色曲线导图 Canvas（自适应布局 / 清洗标签 / 高清导出） |
 | `summary/subtitleExport.ts` | 前端 cues → SRT/VTT/TXT |
-| `summary/useVideoSummary.ts` | metaReady、SSE 订阅、问答流式状态 |
-| `summary/summaryApi.ts` | `/api/summary*`、`/api/subtitles` 客户端 |
+| `summary/useVideoSummary.ts` | metaReady、SSE/轮询、`job_id` 恢复、问答流式状态 |
+| `summary/summaryApi.ts` | `/api/summary*`、`/api/subtitles`；SSE 软超时后轮询 |
 | `summary/summaryTypes.ts` | 类型定义 |
 | `App.tsx` | 有 `info` 时渲染 `VideoResultSection` |
 
 ## 字幕策略（B 站）
 
-1. yt-dlp `subtitles` / `automatic_captions`
-2. 若无：`api.bilibili.com/x/v2/dm/view?aid=&oid=&type=1`（常含 `ai-zh` AI 字幕，**免登录**）
-3. 再尝试 `player/v2`（人工 CC；可能 `need_login_subtitle`，可用 `BILI_COOKIE`）
-4. 解析 `aisubtitle.hdslb.com` JSON `body[]` → cues
+1. 优先 B 站开放 API：`x/v2/dm/view`（常含 `ai-zh`，**免登录**）→ `player/v2`（可选 Cookie）
+2. 解析 `aisubtitle.hdslb.com` JSON `body[]` → cues
+3. 其它平台仍可走 yt-dlp `subtitles` / `automatic_captions`
+
+## 抖音 ASR（云端）
+
+抖音无官方字幕轨。总结链路：
+
+1. `douyin_service` 解析并下载媒体  
+2. `ffmpeg` 提取单声道 16kHz 音频（可截断，见 `ASR_MAX_DURATION_SEC`）  
+3. `POST {ASR_BASE_URL}/audio/transcriptions`（OpenAI 兼容；如 SiliconFlow `FunAudioLLM/SenseVoiceSmall`）  
+4. 得到 `cues` / transcript → 既有 LLM 总结  
+
+未配置 `ASR_API_KEY` 时返回明确 503（「未配置云端 ASR」），**不会**尝试下载本地模型。
 
 ## LLM 输出约定
 
@@ -157,14 +175,21 @@
 | `MAX_SUMMARY_CHARS` | `80000` | |
 | `MAX_CONCURRENT_SUMMARIES` | `2` | |
 | `BILI_COOKIE` / `SESSDATA` | 空 | 可选登录 Cookie |
+| `ASR_PROVIDER` | `api` | 仅支持 `api`；`local` 会明确报错 |
+| `ASR_BASE_URL` | （示例见 `.env.example`） | OpenAI 兼容网关，如 `https://api.siliconflow.cn/v1` |
+| `ASR_API_KEY` | 空 | 抖音总结必填；勿提交真实 Key |
+| `ASR_MODEL` | `whisper-1` | 如 SiliconFlow：`FunAudioLLM/SenseVoiceSmall` |
+| `ASR_TIMEOUT_SEC` | `120` | 单次转写 HTTP 超时 |
+| `ASR_MAX_DURATION_SEC` | `1200` | 过长视频只转写前 N 秒 |
 
-参考：`backend/.env.example`。
+参考：`backend/.env.example`。健康检查 `GET /api/health` 含 `asr` / `asr_api` / `asr_provider`。
 
 ## UI 行为摘要
 
 - **左右同屏**：解析结果左栏为封面 / 标题 / 清晰度下载 / 字幕；右栏为 AI 总结四 Tab（`lg+` 并排，移动端上下堆叠）
 - **自动总结**：`/api/summary/meta` 就绪且 `llm_configured` 后自动启动；失败展示原因 +「重试」；可「重新总结」
-- 总结中：SSE 推送结构化 `result`；前端按章节文档式渲染（清洗时间戳与 `**`）
+- 总结中：SSE 推送结构化 `result`；抖音 ASR 可能数分钟，前端继续等待/轮询，不误报「等待超时」
+- 刷新后可按 `sessionStorage` 中的 `job_id` 恢复进行中或已完成的任务
 - 「复制 Markdown」导出干净文本（无时间戳、无原始 MD 噪声）
 - 拉到字幕后即可切换「字幕文本」，并可导出 SRT/VTT/TXT
 - 解析结果区可独立「下载字幕」（不触发总结、不扣总结配额）
@@ -175,16 +200,20 @@
 
 - 演示 URL：`https://jisuxia.local/demo/ai-summary`（内置字幕，不依赖外网平台）
 - 真实 B 站用例：如带 AI 字幕的公开视频（例如学习路线类 BV）
+- 抖音：配置 `ASR_*` 后，用含 `modal_id=` 或 `/video/{id}` 的链接做总结验收
 
 ```bash
 cd backend
 .venv\Scripts\python.exe tests\test_subtitle_parse.py
 .venv\Scripts\python.exe tests\test_summary_job.py
+# 服务器侧连通性（勿打印 Key；日志仅 ASCII）
+.venv\Scripts\python.exe scripts\verify_asr_api.py
 ```
 
 ## 后续可选
 
-- ASR：无字幕视频的语音转写
+- ~~抖音云端 ASR~~（已实现：OpenAI 兼容 `/audio/transcriptions`）
+- 其它无字幕平台的 ASR 扩展
 - 问答多轮会话持久化
 - 导图主题 / 导出 SVG / `.xmind`
 - ~~与 Pro 会员配额、支付打通~~（已实现：Pro 解析 + 总结无限）

@@ -1,0 +1,7 @@
+# 可选：宿主机用 Caddy 做 HTTPS 反代到 docker web:80
+# 用法见 docs/部署上线.md
+
+{$SITE_DOMAIN} {
+	encode gzip
+	reverse_proxy 127.0.0.1:{$HTTP_PORT:80}
+}
