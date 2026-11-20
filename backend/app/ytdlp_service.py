@@ -143,21 +143,38 @@ def _base_opts(url: str = ""):
     if url and _is_youtube_host(url):
         # Prefer clients that avoid hanging on web player JS / SABR.
         opts["extractor_args"] = {
-            "youtube": {"player_client": ["android", "ios", "web"]}
+            "youtube": {"player_client": ["android", "ios", "tv_embedded"]}
         }
+    # Optional outbound proxy for YouTube / blocked CDNs (CN cloud IPs often need this).
+    proxy = (
+        os.getenv("YTDLP_PROXY", "").strip()
+        or os.getenv("HTTPS_PROXY", "").strip()
+        or os.getenv("https_proxy", "").strip()
+        or os.getenv("HTTP_PROXY", "").strip()
+        or os.getenv("http_proxy", "").strip()
+    )
+    if proxy:
+        opts["proxy"] = proxy
     node = shutil.which("node")
     if node:
         opts["js_runtimes"] = {"node": {"path": str(Path(node).resolve().parent)}}
     return opts
 
 
-def _run_ytdlp(fn, timeout_sec: int = 90):
+def _run_ytdlp(fn, timeout_sec: int = 90, *, youtube: bool = False):
     """Hard-cap yt-dlp so the API never sits on「解析中」forever."""
     with ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(fn)
         try:
             return fut.result(timeout=timeout_sec)
         except FuturesTimeout as exc:
+            if youtube:
+                raise YtdlpError(
+                    "云服务器访问 YouTube 超时（国内轻量机常被拦）。"
+                    "请在 backend/.env 配置可访问外网的代理后重启，例如："
+                    "YTDLP_PROXY=http://127.0.0.1:7890 ；或先用抖音 / 小红书链接。",
+                    status_code=504,
+                ) from exc
             raise YtdlpError(
                 "解析超时（平台响应过慢或被拦截）。请稍后重试，或换抖音 / 小红书链接。",
                 status_code=504,
@@ -434,12 +451,19 @@ def extract_info(url):
         with YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 
+    yt = _is_youtube_host(url)
     try:
-        info = _run_ytdlp(_do_extract, timeout_sec=90)
+        info = _run_ytdlp(_do_extract, timeout_sec=45 if yt else 90, youtube=yt)
     except YtdlpError:
         raise
     except (DownloadError, ExtractorError) as exc:
         logger.warning("extract_info failed: %s", exc)
+        if yt:
+            raise YtdlpError(
+                "无法解析该 YouTube 视频（云服务器网络常被限制）。"
+                "可配置 YTDLP_PROXY 后重试，或先用抖音 / 小红书。",
+                status_code=422,
+            ) from exc
         raise YtdlpError(_friendly_extract_error(url, exc), status_code=422)
     except Exception as exc:
         logger.exception("unexpected extract error")

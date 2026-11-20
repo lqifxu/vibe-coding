@@ -589,31 +589,43 @@ def download_douyin(
 
 def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
     """Prefer music audio / muxed play for speech-to-text (bit_rate CDN is often silent)."""
+    from .asr_service import media_has_audio
+
     info = fetch_douyin_info(url)
     job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
     job_dir.mkdir(parents=True, exist_ok=True)
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
 
+    candidates: List[Tuple[str, List[str]]] = []
     audio_urls = list(info.get("_douyin_audio_urls") or [])
     if audio_urls:
-        out_path = job_dir / "{} [{}].m4a".format(safe_title, info["id"])
-        try:
-            return _download_urls_to_file(audio_urls, out_path, min_bytes=500)
-        except DouyinError as exc:
-            logger.warning("douyin music download failed, try muxed video: %s", exc)
-            if out_path.exists():
-                try:
-                    out_path.unlink()
-                except OSError:
-                    pass
-
+        candidates.append(("m4a", audio_urls))
     play_map = info.get("_douyin_play_map") or {}
     play_urls = list(play_map.get("douyin-play") or []) or list(
         info.get("_douyin_play_urls") or []
     )
-    out_path = job_dir / "{} [{}].mp4".format(safe_title, info["id"])
-    try:
-        return _download_urls_to_file(play_urls, out_path)
-    except DouyinError:
-        remove_dir(job_dir)
-        raise
+    if play_urls:
+        candidates.append(("mp4", play_urls))
+
+    last_err: Optional[BaseException] = None
+    for ext, urls in candidates:
+        # Try URLs one-by-one so a silent CDN file does not block a later good URL.
+        for play in urls:
+            out_path = job_dir / "{} [{}].{}".format(safe_title, info["id"], ext)
+            try:
+                path = _download_urls_to_file([play], out_path, min_bytes=500)
+                if media_has_audio(path):
+                    return path
+                logger.warning("douyin ASR candidate has no audio: %s", play[:80])
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            except DouyinError as exc:
+                last_err = exc
+                logger.warning("douyin ASR candidate failed: %s (%s)", play[:80], exc)
+
+    remove_dir(job_dir)
+    raise DouyinError(
+        "抖音没有下到带音轨的文件，无法语音转写：{}".format(last_err or "直链均为无声")
+    )

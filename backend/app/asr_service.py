@@ -140,6 +140,40 @@ def _probe_duration_sec(media: Path) -> Optional[float]:
         return None
 
 
+def media_has_audio(media: Path) -> bool:
+    """True when ffprobe/ffmpeg sees at least one audio stream."""
+    ffmpeg = get_ffmpeg_binary()
+    if not ffmpeg or not media.is_file():
+        return False
+    probe = Path(ffmpeg).with_name(
+        "ffprobe.exe" if Path(ffmpeg).suffix.lower() == ".exe" else "ffprobe"
+    )
+    try:
+        if probe.exists():
+            cmd = [
+                str(probe),
+                "-v",
+                "error",
+                "-select_streams",
+                "a",
+                "-show_entries",
+                "stream=codec_type",
+                "-of",
+                "csv=p=0",
+                str(media),
+            ]
+            r = subprocess.run(cmd, capture_output=True, timeout=30)
+            out = (r.stdout or b"").decode("utf-8", "replace").strip()
+            return "audio" in out.lower()
+        cmd = [ffmpeg, "-i", str(media)]
+        r = subprocess.run(cmd, capture_output=True, timeout=30)
+        err = (r.stderr or b"").decode("utf-8", "replace").lower()
+        return "audio:" in err or "stream #0:1" in err or "stream #0:0: audio" in err
+    except Exception as exc:
+        logger.warning("media_has_audio failed: %s", exc)
+        return False
+
+
 def extract_audio(
     media: Path,
     dest_dir: Optional[Path] = None,
@@ -154,11 +188,14 @@ def extract_audio(
     out_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / "audio.mp3"
+    # Already-small audio files: remux/transcode; videos: drop video track.
     cmd = [ffmpeg, "-y", "-i", str(media)]
     if max_seconds and max_seconds > 0:
         cmd += ["-t", str(int(max_seconds))]
     cmd += [
         "-vn",
+        "-map",
+        "0:a:0?",
         "-ac",
         "1",
         "-ar",
@@ -173,9 +210,25 @@ def extract_audio(
         raise YtdlpError("提取音频超时，请换更短的视频重试。", status_code=422) from exc
     stderr = (r.stderr or b"").decode("utf-8", "replace")
     if r.returncode != 0 or not out.is_file() or out.stat().st_size < 200:
+        # Retry without optional map (older ffmpeg / odd containers).
+        cmd2 = [ffmpeg, "-y", "-i", str(media)]
+        if max_seconds and max_seconds > 0:
+            cmd2 += ["-t", str(int(max_seconds))]
+        cmd2 += ["-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k", str(out)]
+        try:
+            r = subprocess.run(cmd2, capture_output=True, timeout=180)
+        except subprocess.TimeoutExpired as exc:
+            raise YtdlpError("提取音频超时，请换更短的视频重试。", status_code=422) from exc
+        stderr = (r.stderr or b"").decode("utf-8", "replace")
+    if r.returncode != 0 or not out.is_file() or out.stat().st_size < 200:
         logger.warning("ffmpeg extract audio failed: %s", stderr[-400:])
         low = stderr.lower()
-        if "does not contain any stream" in low or "output file #0 does not contain any stream" in low:
+        if (
+            "does not contain any stream" in low
+            or "output file #0 does not contain any stream" in low
+            or "matches no streams" in low
+            or not media_has_audio(media)
+        ):
             raise YtdlpError(
                 "该视频文件没有音轨，无法语音转写。请换一条带人声的链接重试。",
                 status_code=422,

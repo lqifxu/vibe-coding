@@ -11,7 +11,7 @@ import re
 import uuid
 import urllib.parse
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from .config import MAX_DOWNLOAD_BYTES, TEMP_DIR
 from .cleanup import remove_dir
@@ -422,33 +422,44 @@ def download_xiaohongshu(
 
 def download_xiaohongshu_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
     """Prefer dedicated audio CDN when video masterUrl is silent."""
+    from .asr_service import media_has_audio
+
     info = fetch_xiaohongshu_info(url)
     session = _session()
     job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
     job_dir.mkdir(parents=True, exist_ok=True)
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
 
+    candidates: List[Tuple[str, List[str]]] = []
     audio_urls = list(info.get("_xhs_audio_urls") or [])
     if audio_urls:
-        out_path = job_dir / "{} [{}].m4a".format(safe_title, info["id"])
-        try:
-            return _download_xhs_urls(session, audio_urls, out_path, min_bytes=500)
-        except XiaohongshuError as exc:
-            logger.warning("xhs audio download failed, try video: %s", exc)
-            if out_path.exists():
-                try:
-                    out_path.unlink()
-                except OSError:
-                    pass
-
+        candidates.append(("m4a", audio_urls))
     play_map = info.get("_xhs_play_map") or {}
     play_urls = list(play_map.get("xhs-video") or []) or list(
         info.get("_xhs_play_urls") or []
     )
-    out_path = job_dir / "{} [{}].mp4".format(safe_title, info["id"])
-    try:
-        return _download_xhs_urls(session, play_urls, out_path)
-    except XiaohongshuError:
-        remove_dir(job_dir)
-        raise
+    if play_urls:
+        candidates.append(("mp4", play_urls))
+
+    last_err: Optional[BaseException] = None
+    for ext, urls in candidates:
+        for play in urls:
+            out_path = job_dir / "{} [{}].{}".format(safe_title, info["id"], ext)
+            try:
+                path = _download_xhs_urls(session, [play], out_path, min_bytes=500)
+                if media_has_audio(path):
+                    return path
+                logger.warning("xhs ASR candidate has no audio: %s", play[:80])
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+            except XiaohongshuError as exc:
+                last_err = exc
+                logger.warning("xhs ASR candidate failed: %s", exc)
+
+    remove_dir(job_dir)
+    raise XiaohongshuError(
+        "小红书没有下到带音轨的文件，无法语音转写：{}".format(last_err or "直链均为无声")
+    )
 
