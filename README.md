@@ -8,7 +8,7 @@
 更完整的设计取舍与验收记录见：[docs/项目总结.md](docs/项目总结.md)  
 AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方案.md)  
 会员与 Stripe 见：[docs/会员与Stripe支付.md](docs/会员与Stripe支付.md)  
-上线部署见：[docs/部署上线.md](docs/部署上线.md)（Docker Compose）
+上线部署见：[docs/部署上线.md](docs/部署上线.md)（Docker Compose，或宝塔 Linux：静态站点 + Nginx 反代 + 进程守护）
 
 ## 功能
 

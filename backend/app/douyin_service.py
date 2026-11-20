@@ -200,6 +200,46 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def _music_urls_from_aweme(item: Dict[str, Any]) -> List[str]:
+    """Douyin bit_rate play_addr is often video-only; music.play_url has the audio."""
+    music = item.get("music") if isinstance(item.get("music"), dict) else {}
+    urls: List[str] = []
+    for key in ("play_url", "play_url_lowbr", "play_url_h264"):
+        for u in _url_list(music.get(key)):
+            if u not in urls:
+                urls.append(u)
+    return urls
+
+
+def _muxed_play_urls_from_uri(uri: Optional[str]) -> List[str]:
+    """iesdouyin /play/ usually returns a muxed mp4 with audio (may carry watermark)."""
+    if not uri:
+        return []
+    return [
+        "https://www.iesdouyin.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
+        "https://aweme.snssdk.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
+        "https://www.iesdouyin.com/aweme/v1/playwm/?video_id={}&ratio=720p&line=0".format(uri),
+    ]
+
+
+def _video_uri(video: Dict[str, Any]) -> Optional[str]:
+    for key in ("play_addr_h264", "play_addr", "download_addr"):
+        addr = video.get(key)
+        if isinstance(addr, dict):
+            uri = addr.get("uri") or addr.get("url_key")
+            if uri:
+                return str(uri)
+    for br in video.get("bit_rate") or []:
+        if not isinstance(br, dict):
+            continue
+        addr = br.get("play_addr") or {}
+        if isinstance(addr, dict):
+            uri = addr.get("uri") or addr.get("url_key")
+            if uri:
+                return str(uri)
+    return None
+
+
 def _fetch_aweme_item(video_id: str) -> Optional[Dict[str, Any]]:
     """Public feed endpoint still returns the requested aweme without a signature."""
     api = (
@@ -310,8 +350,15 @@ def _meta_from_aweme(item: Dict[str, Any], video_id: str) -> Dict[str, Any]:
             }
         )
         play_map[fid] = stream["urls"]
-    if formats and "douyin-play" not in play_map:
-        play_map["douyin-play"] = play_map[formats[0]["format_id"]]
+
+    muxed = _muxed_play_urls_from_uri(_video_uri(video))
+    audio_urls = _music_urls_from_aweme(item)
+    if formats:
+        primary = list(play_map[formats[0]["format_id"]])
+        # Prefer muxed (with audio) for default download / ASR fallback.
+        play_map["douyin-play"] = muxed + [u for u in primary if u not in muxed] if muxed else primary
+    elif muxed:
+        play_map["douyin-play"] = muxed
 
     cover = None
     for key in ("origin_cover", "cover", "dynamic_cover"):
@@ -333,6 +380,7 @@ def _meta_from_aweme(item: Dict[str, Any], video_id: str) -> Dict[str, Any]:
         "duration": int(duration_ms / 1000) if duration_ms > 1000 else (duration_ms or None),
         "formats": formats,
         "play_map": play_map,
+        "audio_urls": audio_urls,
         "webpage_url": "https://www.douyin.com/video/{}".format(video_id),
     }
 
@@ -388,12 +436,7 @@ def _parse_share_html(html: str, video_id: str) -> Dict[str, Any]:
         play_urls = [_unescape(u) for u in re.findall(r'"(https:[^"]+)"', m.group(1))]
 
     if uri:
-        # Prefer no-watermark play endpoint; fall back to watermarked
-        play_urls = [
-            "https://www.iesdouyin.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
-            "https://aweme.snssdk.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
-            "https://www.iesdouyin.com/aweme/v1/playwm/?video_id={}&ratio=720p&line=0".format(uri),
-        ] + play_urls
+        play_urls = _muxed_play_urls_from_uri(uri) + play_urls
 
     # dedupe keep order
     seen = set()
@@ -406,6 +449,14 @@ def _parse_share_html(html: str, video_id: str) -> Dict[str, Any]:
 
     if not play_urls:
         raise DouyinError("已打开分享页，但未找到可下载的视频地址（可能已失效或需登录）")
+
+    audio_urls: List[str] = []
+    m = re.search(r'"play_url"\s*:\s*\{.*?\"url_list\"\s*:\s*\[(.*?)\]', html, re.S)
+    if m:
+        for u in re.findall(r'"(https:[^"]+)"', m.group(1)):
+            u = _unescape(u)
+            if u not in audio_urls:
+                audio_urls.append(u)
 
     return {
         "id": video_id,
@@ -426,6 +477,7 @@ def _parse_share_html(html: str, video_id: str) -> Dict[str, Any]:
             }
         ],
         "play_map": {"douyin-play": play_urls},
+        "audio_urls": audio_urls,
         "webpage_url": "https://www.douyin.com/video/{}".format(video_id),
     }
 
@@ -437,6 +489,7 @@ def _public_info(meta: Dict[str, Any]) -> Dict[str, Any]:
         for url in urls:
             if url not in flat:
                 flat.append(url)
+    audio_urls = list(meta.get("audio_urls") or [])
     return {
         "id": meta["id"],
         "title": meta["title"],
@@ -448,6 +501,7 @@ def _public_info(meta: Dict[str, Any]) -> Dict[str, Any]:
         "formats": meta.get("formats") or [],
         "_douyin_play_map": play_map,
         "_douyin_play_urls": flat,
+        "_douyin_audio_urls": audio_urls,
     }
 
 
@@ -461,6 +515,50 @@ def fetch_douyin_info(url: str) -> Dict[str, Any]:
     _, data, _ = _request(share_url)
     html = data.decode("utf-8", "replace")
     return _public_info(_parse_share_html(html, video_id))
+
+
+def _download_urls_to_file(
+    urls: List[str],
+    out_path: Path,
+    min_bytes: int = 1000,
+) -> Path:
+    last_err = None
+    for play in urls:
+        try:
+            req = urllib.request.Request(
+                play,
+                headers={
+                    "User-Agent": _UA,
+                    "Referer": "https://www.douyin.com/",
+                },
+            )
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                total = 0
+                with open(out_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 256)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > MAX_DOWNLOAD_BYTES:
+                            raise DouyinError("文件超过体积上限（500MB）", status_code=413)
+                        f.write(chunk)
+                if total < min_bytes:
+                    raise DouyinError("下载内容过小，可能不是媒体文件")
+                logger.info("douyin downloaded %s bytes from %s", total, play[:80])
+                return out_path
+        except DouyinError:
+            raise
+        except Exception as exc:
+            last_err = exc
+            logger.warning("douyin media url failed: %s (%s)", play[:80], exc)
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
+            continue
+    raise DouyinError("抖音媒体下载失败：{}".format(last_err or "无可用直链"))
 
 
 def download_douyin(
@@ -482,47 +580,40 @@ def download_douyin(
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
     out_path = job_dir / "{} [{}].mp4".format(safe_title, info["id"])
 
-    last_err = None
-    for play in play_urls:
+    try:
+        return _download_urls_to_file(play_urls, out_path)
+    except DouyinError:
+        remove_dir(job_dir)
+        raise
+
+
+def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
+    """Prefer music audio / muxed play for speech-to-text (bit_rate CDN is often silent)."""
+    info = fetch_douyin_info(url)
+    job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
+    job_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
+
+    audio_urls = list(info.get("_douyin_audio_urls") or [])
+    if audio_urls:
+        out_path = job_dir / "{} [{}].m4a".format(safe_title, info["id"])
         try:
-            req = urllib.request.Request(
-                play,
-                headers={
-                    "User-Agent": _UA,
-                    "Referer": "https://www.douyin.com/",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                ctype = (resp.headers.get("Content-Type") or "").lower()
-                # Follow redirects already handled; write stream
-                total = 0
-                with open(out_path, "wb") as f:
-                    while True:
-                        chunk = resp.read(1024 * 256)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > MAX_DOWNLOAD_BYTES:
-                            raise DouyinError("文件超过体积上限（500MB）", status_code=413)
-                        f.write(chunk)
-                if total < 1000:
-                    raise DouyinError("下载内容过小，可能不是视频")
-                if "video" not in ctype and total < 50_000:
-                    # still accept if looks like mp4 (ftyp)
-                    pass
-                logger.info("douyin downloaded %s bytes from %s", total, play[:80])
-                return out_path
-        except DouyinError:
-            raise
-        except Exception as exc:
-            last_err = exc
-            logger.warning("douyin play url failed: %s (%s)", play[:80], exc)
+            return _download_urls_to_file(audio_urls, out_path, min_bytes=500)
+        except DouyinError as exc:
+            logger.warning("douyin music download failed, try muxed video: %s", exc)
             if out_path.exists():
                 try:
                     out_path.unlink()
                 except OSError:
                     pass
-            continue
 
-    remove_dir(job_dir)
-    raise DouyinError("抖音视频下载失败：{}".format(last_err or "无可用直链"))
+    play_map = info.get("_douyin_play_map") or {}
+    play_urls = list(play_map.get("douyin-play") or []) or list(
+        info.get("_douyin_play_urls") or []
+    )
+    out_path = job_dir / "{} [{}].mp4".format(safe_title, info["id"])
+    try:
+        return _download_urls_to_file(play_urls, out_path)
+    except DouyinError:
+        remove_dir(job_dir)
+        raise

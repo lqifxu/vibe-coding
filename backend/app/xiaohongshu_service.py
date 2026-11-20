@@ -105,6 +105,17 @@ def _note_from_state(state: Dict[str, Any]) -> Dict[str, Any]:
     raise XiaohongshuError("未找到笔记内容。请使用「分享 → 复制链接」里的完整地址。")
 
 
+def _stream_urls(item: Dict[str, Any]) -> List[str]:
+    master = item.get("masterUrl") or item.get("url")
+    urls: List[str] = []
+    if isinstance(master, str) and master.startswith("http"):
+        urls.append(master)
+    for extra in item.get("backupUrls") or []:
+        if isinstance(extra, str) and extra.startswith("http") and extra not in urls:
+            urls.append(extra)
+    return urls
+
+
 def _streams(note: Dict[str, Any]) -> List[Dict[str, Any]]:
     video = note.get("video") if isinstance(note.get("video"), dict) else {}
     media = video.get("media") if isinstance(video.get("media"), dict) else {}
@@ -113,16 +124,16 @@ def _streams(note: Dict[str, Any]) -> List[Dict[str, Any]]:
     for codec, items in stream.items():
         if not isinstance(items, list):
             continue
+        codec_l = str(codec).lower()
+        # Separate audio track list — used for ASR when video stream is silent.
+        if codec_l in ("audio", "aac", "mp4a"):
+            continue
         for item in items:
             if not isinstance(item, dict):
                 continue
-            master = item.get("masterUrl") or item.get("url")
-            if not isinstance(master, str) or not master.startswith("http"):
+            urls = _stream_urls(item)
+            if not urls:
                 continue
-            urls = [master]
-            for extra in item.get("backupUrls") or []:
-                if isinstance(extra, str) and extra.startswith("http") and extra not in urls:
-                    urls.append(extra)
             width = _as_int(item.get("width"))
             height = _as_int(item.get("height"))
             short = min(width, height) if width and height else (height or width)
@@ -132,17 +143,44 @@ def _streams(note: Dict[str, Any]) -> List[Dict[str, Any]]:
                 if val > 1000:
                     duration_ms = val
                     break
+            audio_codec = str(item.get("audioCodec") or item.get("audio_codec") or "").lower()
+            has_audio = bool(audio_codec) and audio_codec not in ("none", "null", "unknown")
             found.append(
                 {
-                    "codec": str(codec).lower(),
+                    "codec": codec_l,
                     "short": short,
                     "height": height or None,
                     "size": _as_int(item.get("size")) or None,
                     "duration_ms": duration_ms,
+                    "has_audio": has_audio,
                     "urls": urls,
                 }
             )
     return found
+
+
+def _audio_urls_from_note(note: Dict[str, Any]) -> List[str]:
+    """Collect dedicated audio CDN URLs when video masterUrl has no soundtrack."""
+    video = note.get("video") if isinstance(note.get("video"), dict) else {}
+    media = video.get("media") if isinstance(video.get("media"), dict) else {}
+    stream = media.get("stream") if isinstance(media.get("stream"), dict) else {}
+    urls: List[str] = []
+    for key in ("audio", "aac", "mp4a"):
+        items = stream.get(key) or []
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            for u in _stream_urls(item):
+                if u not in urls:
+                    urls.append(u)
+    # Some notes expose audio under video.consumer or music-like fields.
+    for key in ("audioUrl", "soundUrl", "mp3Url"):
+        raw = video.get(key) or media.get(key)
+        if isinstance(raw, str) and raw.startswith("http") and raw not in urls:
+            urls.append(raw)
+    return urls
 
 
 def _meta_from_note(note: Dict[str, Any], page_url: str) -> Dict[str, Any]:
@@ -160,11 +198,20 @@ def _meta_from_note(note: Dict[str, Any], page_url: str) -> Dict[str, Any]:
         prev = best.get(key)
         rank = codec_rank.get(stream["codec"], 9)
         prev_rank = codec_rank.get(prev["codec"], 9) if prev else 99
-        if prev is None or rank < prev_rank or (
+        # Prefer streams that declare an audio codec (needed for ASR / playback with sound).
+        better_audio = bool(stream.get("has_audio")) and not (prev or {}).get("has_audio")
+        worse_audio = not stream.get("has_audio") and bool((prev or {}).get("has_audio"))
+        if worse_audio:
+            continue
+        if prev is None or better_audio or rank < prev_rank or (
             rank == prev_rank and (stream["size"] or 0) > (prev["size"] or 0)
         ):
             best[key] = stream
-    ordered = sorted(best.values(), key=lambda s: (s["short"], s["size"] or 0), reverse=True)
+    ordered = sorted(
+        best.values(),
+        key=lambda s: (1 if s.get("has_audio") else 0, s["short"], s["size"] or 0),
+        reverse=True,
+    )
 
     formats: List[Dict[str, Any]] = []
     play_map: Dict[str, List[str]] = {}
@@ -212,6 +259,7 @@ def _meta_from_note(note: Dict[str, Any], page_url: str) -> Dict[str, Any]:
         "duration": duration,
         "formats": formats,
         "play_map": play_map,
+        "audio_urls": _audio_urls_from_note(note),
         "webpage_url": page_url,
     }
 
@@ -277,6 +325,7 @@ def fetch_xiaohongshu_info(url: str) -> Dict[str, Any]:
     note = _note_from_state(_loads_state(html))
     meta = _meta_from_note(note, final_url if _note_id(final_url) else url)
     play_map = meta.pop("play_map")
+    audio_urls = list(meta.pop("audio_urls", None) or [])
     flat: List[str] = []
     for urls in play_map.values():
         for item in urls:
@@ -293,7 +342,53 @@ def fetch_xiaohongshu_info(url: str) -> Dict[str, Any]:
         "formats": meta.get("formats") or [],
         "_xhs_play_map": play_map,
         "_xhs_play_urls": flat,
+        "_xhs_audio_urls": audio_urls,
     }
+
+
+def _download_xhs_urls(
+    session,
+    urls: List[str],
+    out_path: Path,
+    min_bytes: int = 1000,
+) -> Path:
+    last_err = None
+    for play in urls:
+        try:
+            resp = session.get(
+                play,
+                timeout=60,
+                allow_redirects=True,
+                headers={"Referer": "https://www.xiaohongshu.com/"},
+                stream=True,
+            )
+            if resp.status_code != 200:
+                raise XiaohongshuError("下载失败：HTTP {}".format(resp.status_code))
+            total = 0
+            with open(out_path, "wb") as handle:
+                for chunk in resp.iter_content(1024 * 256):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_DOWNLOAD_BYTES:
+                        raise XiaohongshuError("文件超过体积上限（500MB）", status_code=413)
+                    handle.write(chunk)
+            if total < min_bytes:
+                raise XiaohongshuError("下载内容过小，可能不是媒体文件")
+            logger.info("xhs downloaded %s bytes", total)
+            return out_path
+        except XiaohongshuError:
+            raise
+        except Exception as exc:
+            last_err = exc
+            logger.warning("xhs media url failed: %s", exc)
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
+            continue
+    raise XiaohongshuError("小红书媒体下载失败：{}".format(last_err or "无可用直链"))
 
 
 def download_xiaohongshu(
@@ -318,40 +413,42 @@ def download_xiaohongshu(
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
     out_path = job_dir / "{} [{}].mp4".format(safe_title, info["id"])
 
-    last_err = None
-    for play in play_urls:
+    try:
+        return _download_xhs_urls(session, play_urls, out_path)
+    except XiaohongshuError:
+        remove_dir(job_dir)
+        raise
+
+
+def download_xiaohongshu_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
+    """Prefer dedicated audio CDN when video masterUrl is silent."""
+    info = fetch_xiaohongshu_info(url)
+    session = _session()
+    job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
+    job_dir.mkdir(parents=True, exist_ok=True)
+    safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
+
+    audio_urls = list(info.get("_xhs_audio_urls") or [])
+    if audio_urls:
+        out_path = job_dir / "{} [{}].m4a".format(safe_title, info["id"])
         try:
-            resp = session.get(
-                play,
-                timeout=60,
-                allow_redirects=True,
-                headers={"Referer": "https://www.xiaohongshu.com/"},
-                stream=True,
-            )
-            if resp.status_code != 200:
-                raise XiaohongshuError("下载失败：HTTP {}".format(resp.status_code))
-            total = 0
-            with open(out_path, "wb") as handle:
-                for chunk in resp.iter_content(1024 * 256):
-                    if not chunk:
-                        continue
-                    total += len(chunk)
-                    if total > MAX_DOWNLOAD_BYTES:
-                        raise XiaohongshuError("文件超过体积上限（500MB）", status_code=413)
-                    handle.write(chunk)
-            if total < 1000:
-                raise XiaohongshuError("下载内容过小，可能不是视频")
-            logger.info("xhs downloaded %s bytes", total)
-            return out_path
-        except XiaohongshuError:
-            raise
-        except Exception as exc:
-            last_err = exc
-            logger.warning("xhs play url failed: %s", exc)
+            return _download_xhs_urls(session, audio_urls, out_path, min_bytes=500)
+        except XiaohongshuError as exc:
+            logger.warning("xhs audio download failed, try video: %s", exc)
             if out_path.exists():
                 try:
                     out_path.unlink()
                 except OSError:
                     pass
-    remove_dir(job_dir)
-    raise XiaohongshuError("小红书视频下载失败：{}".format(last_err or "无可用直链"))
+
+    play_map = info.get("_xhs_play_map") or {}
+    play_urls = list(play_map.get("xhs-video") or []) or list(
+        info.get("_xhs_play_urls") or []
+    )
+    out_path = job_dir / "{} [{}].mp4".format(safe_title, info["id"])
+    try:
+        return _download_xhs_urls(session, play_urls, out_path)
+    except XiaohongshuError:
+        remove_dir(job_dir)
+        raise
+

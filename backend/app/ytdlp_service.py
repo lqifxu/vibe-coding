@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -102,19 +103,31 @@ def _cookiefile_path() -> Optional[str]:
     return None
 
 
-def _base_opts():
-    opts = {
+def _is_youtube_host(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "youtu.be" or host.endswith("youtube.com") or host.endswith(
+        "youtube-nocookie.com"
+    )
+
+
+def _base_opts(url: str = ""):
+    """Build yt-dlp options. Never attach Bilibili Referer/Cookie to YouTube requests."""
+    headers = {
+        "User-Agent": _DESKTOP_UA,
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    if url and is_bilibili_url(url):
+        headers["Referer"] = "https://www.bilibili.com/"
+    elif url and _is_youtube_host(url):
+        headers["Referer"] = "https://www.youtube.com/"
+    opts: Dict[str, Any] = {
         "quiet": True,
         "no_warnings": True,
         "noprogress": True,
         "noplaylist": True,
-        "socket_timeout": 30,
-        "retries": 3,
-        "http_headers": {
-            "User-Agent": _DESKTOP_UA,
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-            "Referer": "https://www.bilibili.com/",
-        },
+        "socket_timeout": 20,
+        "retries": 2,
+        "http_headers": headers,
     }
     ffdir = get_ffmpeg_dir()
     if ffdir:
@@ -122,13 +135,33 @@ def _base_opts():
     cookiefile = _cookiefile_path()
     if cookiefile:
         opts["cookiefile"] = cookiefile
-    bili_cookie = _bili_cookie_header()
-    if bili_cookie:
-        opts["http_headers"]["Cookie"] = bili_cookie
+    # Only send Bilibili cookie to Bilibili — never to YouTube.
+    if url and is_bilibili_url(url):
+        bili_cookie = _bili_cookie_header()
+        if bili_cookie:
+            opts["http_headers"]["Cookie"] = bili_cookie
+    if url and _is_youtube_host(url):
+        # Prefer clients that avoid hanging on web player JS / SABR.
+        opts["extractor_args"] = {
+            "youtube": {"player_client": ["android", "ios", "web"]}
+        }
     node = shutil.which("node")
     if node:
         opts["js_runtimes"] = {"node": {"path": str(Path(node).resolve().parent)}}
     return opts
+
+
+def _run_ytdlp(fn, timeout_sec: int = 90):
+    """Hard-cap yt-dlp so the API never sits on「解析中」forever."""
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(fn)
+        try:
+            return fut.result(timeout=timeout_sec)
+        except FuturesTimeout as exc:
+            raise YtdlpError(
+                "解析超时（平台响应过慢或被拦截）。请稍后重试，或换抖音 / 小红书链接。",
+                status_code=504,
+            ) from exc
 
 
 def get_ffmpeg_dir():
@@ -371,6 +404,7 @@ def extract_info(url):
             info = fetch_douyin_info(url)
             info.pop("_douyin_play_urls", None)
             info.pop("_douyin_play_map", None)
+            info.pop("_douyin_audio_urls", None)
             return info
         except DouyinError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
@@ -388,15 +422,22 @@ def extract_info(url):
             info = fetch_xiaohongshu_info(url)
             info.pop("_xhs_play_urls", None)
             info.pop("_xhs_play_map", None)
+            info.pop("_xhs_audio_urls", None)
             return info
         except XiaohongshuError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
 
-    opts = _base_opts()
+    opts = _base_opts(url)
     opts["skip_download"] = True
-    try:
+
+    def _do_extract():
         with YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            return ydl.extract_info(url, download=False)
+
+    try:
+        info = _run_ytdlp(_do_extract, timeout_sec=90)
+    except YtdlpError:
+        raise
     except (DownloadError, ExtractorError) as exc:
         logger.warning("extract_info failed: %s", exc)
         raise YtdlpError(_friendly_extract_error(url, exc), status_code=422)
@@ -448,7 +489,7 @@ def download_video(url, format_id):
     job_dir.mkdir(parents=True, exist_ok=True)
     outtmpl = str(job_dir / "%(title).80B [%(id)s].%(ext)s")
 
-    opts = _base_opts()
+    opts = _base_opts(url)
     opts.update({
         "format": format_id or "best",
         "outtmpl": outtmpl,
@@ -458,9 +499,15 @@ def download_video(url, format_id):
     if ffmpeg_available():
         opts["merge_output_format"] = "mp4"
 
-    try:
+    def _do_download():
         with YoutubeDL(opts) as ydl:
             ydl.download([url])
+
+    try:
+        _run_ytdlp(_do_download, timeout_sec=300)
+    except YtdlpError:
+        remove_dir(job_dir)
+        raise
     except (DownloadError, ExtractorError) as exc:
         remove_dir(job_dir)
         msg = str(exc)

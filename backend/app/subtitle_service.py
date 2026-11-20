@@ -19,9 +19,9 @@ from .bilibili_service import is_bilibili_url
 from .cleanup import remove_dir
 from .config import TEMP_DIR
 from .demo_fixture import demo_subtitles, is_demo_summary_url
-from .douyin_service import download_douyin, fetch_douyin_info, is_douyin_url
+from .douyin_service import download_douyin_for_asr, fetch_douyin_info, is_douyin_url
 from .xiaohongshu_service import (
-    download_xiaohongshu,
+    download_xiaohongshu_for_asr,
     fetch_xiaohongshu_info,
     is_xiaohongshu_url,
 )
@@ -490,7 +490,7 @@ def _fetch_douyin_subtitles_via_asr(url: str, max_chars: int) -> Dict[str, Any]:
             status_code=503,
         )
     info = fetch_douyin_info(url)
-    media = download_douyin(url)
+    media = download_douyin_for_asr(url)
     return _subtitles_from_media(info, media, max_chars, url, "抖音视频")
 
 
@@ -503,7 +503,7 @@ def _download_youtube_audio(url: str) -> Path:
     """Lowest audio track is enough for speech-to-text."""
     job_dir = TEMP_DIR / str(uuid.uuid4())
     job_dir.mkdir(parents=True, exist_ok=True)
-    opts = _base_opts()
+    opts = _base_opts(url)
     opts.update(
         {
             "format": "worstaudio/bestaudio/worst",
@@ -559,7 +559,7 @@ def _fetch_xiaohongshu_subtitles_via_asr(url: str, max_chars: int) -> Dict[str, 
             status_code=503,
         )
     info = fetch_xiaohongshu_info(url)
-    media = download_xiaohongshu(url)
+    media = download_xiaohongshu_for_asr(url)
     return _subtitles_from_media(info, media, max_chars, url, "小红书笔记")
 
 
@@ -582,7 +582,7 @@ def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
             status_code=422,
         )
 
-    opts = _base_opts()
+    opts = _base_opts(url)
     opts.update(
         {
             "skip_download": True,

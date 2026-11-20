@@ -174,6 +174,12 @@ def extract_audio(
     stderr = (r.stderr or b"").decode("utf-8", "replace")
     if r.returncode != 0 or not out.is_file() or out.stat().st_size < 200:
         logger.warning("ffmpeg extract audio failed: %s", stderr[-400:])
+        low = stderr.lower()
+        if "does not contain any stream" in low or "output file #0 does not contain any stream" in low:
+            raise YtdlpError(
+                "该视频文件没有音轨，无法语音转写。请换一条带人声的链接重试。",
+                status_code=422,
+            )
         raise YtdlpError("无法从视频中提取音频，请换一条链接重试。", status_code=422)
     return out
 

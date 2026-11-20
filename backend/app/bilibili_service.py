@@ -68,11 +68,13 @@ def _cookie_header() -> str:
     if raw:
         return raw
     sess = os.getenv("SESSDATA", "").strip()
-    if not sess:
-        return ""
-    if sess.lower().startswith("sessdata="):
-        return sess
-    return "SESSDATA={}".format(sess)
+    if sess:
+        if sess.lower().startswith("sessdata="):
+            return sess
+        return "SESSDATA={}".format(sess)
+    # Anonymous buvid reduces bare 412 on some cloud IPs; SESSDATA still recommended.
+    buvid = str(uuid.uuid4()).upper()
+    return "buvid3={}; buvid4={}".format(buvid, buvid)
 
 
 def _headers() -> Dict[str, str]:
@@ -95,6 +97,15 @@ def _http_json(url: str, timeout: int = 25) -> Dict[str, Any]:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
+        if exc.code == 412:
+            raise BilibiliError(
+                "B站拦截了云服务器访问（HTTP 412）。"
+                "请在服务器 backend/.env 配置浏览器 Cookie，例如："
+                "BILI_COOKIE=SESSDATA=xxx; bili_jct=xxx; DedeUserID=xxx; buvid3=xxx"
+                "（从已登录 bilibili.com 的开发者工具 → Application → Cookies 复制），"
+                "保存后重启 jisuxia-api。",
+                status_code=422,
+            ) from exc
         raise BilibiliError("请求 B站 API 失败：HTTP {}".format(exc.code)) from exc
     except Exception as exc:
         raise BilibiliError("请求 B站 API 失败：{}".format(exc)) from exc
