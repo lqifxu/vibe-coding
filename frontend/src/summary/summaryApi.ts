@@ -61,6 +61,7 @@ export async function fetchSummarizeStatus(jobId: string): Promise<SummaryJob> {
 
 type SubscribeHandlers = {
   onUpdate: (job: SummaryJob) => void
+  onDelta?: (delta: string) => void
   onError?: (message: string, meta?: { softTimeout?: boolean; jobId?: string }) => void
 }
 
@@ -167,6 +168,14 @@ export function subscribeSummarizeEvents(
     }
   }
 
+  es.addEventListener('delta', ((ev: MessageEvent) => {
+    try {
+      const data = JSON.parse(ev.data) as { delta?: string }
+      if (data.delta) handlers.onDelta?.(data.delta)
+    } catch {
+      /* ignore */
+    }
+  }) as EventListener)
   es.addEventListener('update', onUpdate as EventListener)
   es.addEventListener('end', (ev) => {
     onUpdate(ev as MessageEvent)

@@ -98,16 +98,27 @@ async def rate_limit_handler(_request, exc):
     return JSONResponse(status_code=429, content={"detail": str(exc)})
 
 
+def _parse_subject(user, ip: str) -> str:
+    if user:
+        return "user:{}".format(int(user["id"]))
+    return "ip:{}".format(ip or "unknown")
+
+
 @app.get("/api/health")
-def health():
+def health(request: Request):
     from .asr_service import asr_api_configured, asr_available, asr_provider
 
+    user = get_optional_user(request)
+    vip = bool(user and is_vip_user(int(user["id"])))
+    remaining = None if vip else rate_limiter.remaining_daily_parse(_parse_subject(user, _client_ip(request)))
     return {
         "ok": True,
         "yt_dlp": ytdlp_version(),
         "ffmpeg": ffmpeg_available(),
         "ffmpeg_detail": check_ffmpeg_cli(),
         "free_daily_parses": FREE_DAILY_PARSES,
+        "remaining_parses": remaining,
+        "is_vip": vip,
         "asr": asr_available(),
         "asr_provider": asr_provider(),
         "asr_api": asr_api_configured(),
@@ -122,7 +133,7 @@ def api_info(body: UrlBody, request: Request):
     if user and is_vip_user(int(user["id"])):
         remaining = None  # Pro: unlimited parses
     else:
-        remaining = rate_limiter.check_daily_parse(ip)
+        remaining = rate_limiter.check_daily_parse(_parse_subject(user, ip))
     url = validate_url(body.url)
     info = extract_info(url)
     info["remaining_parses"] = remaining

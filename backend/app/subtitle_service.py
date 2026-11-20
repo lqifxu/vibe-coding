@@ -1,11 +1,14 @@
-"""Fetch and parse platform captions via yt-dlp (no ASR)."""
+"""Fetch platform captions, with speech-to-text when a site has no caption track."""
 from __future__ import annotations
 
 import json
 import logging
 import os
 import re
+import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from yt_dlp import YoutubeDL
@@ -14,8 +17,14 @@ from yt_dlp.utils import DownloadError, ExtractorError
 from .asr_service import asr_available, transcribe_media
 from .bilibili_service import is_bilibili_url
 from .cleanup import remove_dir
+from .config import TEMP_DIR
 from .demo_fixture import demo_subtitles, is_demo_summary_url
 from .douyin_service import download_douyin, fetch_douyin_info, is_douyin_url
+from .xiaohongshu_service import (
+    download_xiaohongshu,
+    fetch_xiaohongshu_info,
+    is_xiaohongshu_url,
+)
 from .ytdlp_service import YtdlpError, _base_opts
 
 logger = logging.getLogger(__name__)
@@ -50,22 +59,44 @@ def _lang_rank(code: str) -> int:
     return 1000
 
 
+_CAPTION_EXT_RANK = {"json3": 0, "srv3": 1, "srt": 2, "ttml": 3, "vtt": 4}
+
+
+def _caption_candidates(
+    tracks: Dict[str, List[Dict[str, Any]]],
+) -> List[Tuple[str, Dict[str, Any]]]:
+    """Original tracks first, then translations. json3 before playlist-style vtt."""
+    found: List[Tuple[str, Dict[str, Any]]] = []
+    for lang, items in (tracks or {}).items():
+        for track in items or []:
+            if not track.get("url"):
+                continue
+            protocol = (track.get("protocol") or "").lower()
+            if protocol.startswith("m3u8"):
+                continue
+            ext = (track.get("ext") or "").lower()
+            if ext and ext not in _CAPTION_EXT_RANK:
+                continue
+            found.append((lang, track))
+
+    def sort_key(item: Tuple[str, Dict[str, Any]]) -> Tuple[int, int, int]:
+        lang, track = item
+        url = track.get("url") or ""
+        translated = 1 if "tlang=" in url else 0
+        ext_rank = _CAPTION_EXT_RANK.get((track.get("ext") or "").lower(), 9)
+        return (translated, _lang_rank(lang), ext_rank)
+
+    found.sort(key=sort_key)
+    return found
+
+
 def _pick_track(
     tracks: Dict[str, List[Dict[str, Any]]],
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
-    if not tracks:
+    candidates = _caption_candidates(tracks)
+    if not candidates:
         return None
-    ranked = sorted(tracks.keys(), key=_lang_rank)
-    for lang in ranked:
-        items = tracks.get(lang) or []
-        preferred_ext = ("vtt", "srv3", "json3", "srt", "ttml")
-        by_ext = {((t.get("ext") or "").lower()): t for t in items if t.get("url")}
-        for ext in preferred_ext:
-            if ext in by_ext:
-                return lang, by_ext[ext]
-        if items and items[0].get("url"):
-            return lang, items[0]
-    return None
+    return candidates[0]
 
 
 def _parse_ts(ts: str) -> float:
@@ -176,6 +207,16 @@ def _parse_json3(raw: str) -> List[Dict[str, Any]]:
     return cues
 
 
+def _cues_from_track(track: Dict[str, Any]) -> List[Dict[str, Any]]:
+    raw = _download_url(track.get("url") or "")
+    if raw.lstrip().startswith("#EXTM3U"):
+        return []
+    ext = (track.get("ext") or "").lower()
+    if ext == "json3" or raw.lstrip().startswith("{"):
+        return _parse_json3(raw)
+    return parse_vtt_or_srt(raw)
+
+
 def cues_to_transcript(cues: List[Dict[str, Any]], max_chars: int) -> str:
     lines = ["[{}] {}".format(c["start"], c["text"]) for c in cues]
     out = "\n".join(lines)
@@ -265,6 +306,13 @@ def _bili_cookie_header() -> str:
 
 
 def _download_url(url: str) -> str:
+    host = (urlparse(url).netloc or "").lower()
+    if "youtube.com" in host or "googlevideo.com" in host:
+        referer = "https://www.youtube.com/"
+    elif "bilibili.com" in host or "hdslb.com" in host:
+        referer = "https://www.bilibili.com/"
+    else:
+        referer = "https://{}/".format(host) if host else "https://www.youtube.com/"
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -272,10 +320,10 @@ def _download_url(url: str) -> str:
             "Chrome/122.0.0.0 Safari/537.36"
         ),
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        "Referer": "https://www.bilibili.com",
+        "Referer": referer,
     }
     cookie = _bili_cookie_header()
-    if cookie and ("bilibili.com" in url or "hdslb.com" in url):
+    if cookie and ("bilibili.com" in host or "hdslb.com" in host):
         headers["Cookie"] = cookie
     req = Request(url, headers=headers)
     with urlopen(req, timeout=45) as resp:
@@ -407,6 +455,32 @@ def _pack_bilibili_subtitles(url: str, max_chars: int) -> Optional[Dict[str, Any
     }
 
 
+def _subtitles_from_media(
+    info: Dict[str, Any],
+    media,
+    max_chars: int,
+    url: str,
+    fallback_title: str,
+) -> Dict[str, Any]:
+    job_dir = media.parent
+    try:
+        asr = transcribe_media(media)
+    finally:
+        remove_dir(job_dir)
+    cues = asr.get("cues") or []
+    if not cues:
+        raise YtdlpError("语音转写结果为空，无法生成总结。", status_code=422)
+    return {
+        "title": info.get("title") or fallback_title,
+        "language": asr.get("language") or "zh",
+        "source": "asr",
+        "cues": cues,
+        "transcript": cues_to_transcript(cues, max_chars),
+        "webpage_url": info.get("webpage_url") or url,
+        "asr_engine": asr.get("engine"),
+    }
+
+
 def _fetch_douyin_subtitles_via_asr(url: str, max_chars: int) -> Dict[str, Any]:
     """Download Douyin media and speech-to-text (no official caption track)."""
     if not asr_available():
@@ -417,25 +491,76 @@ def _fetch_douyin_subtitles_via_asr(url: str, max_chars: int) -> Dict[str, Any]:
         )
     info = fetch_douyin_info(url)
     media = download_douyin(url)
-    job_dir = media.parent
-    try:
-        asr = transcribe_media(media)
-    finally:
-        remove_dir(job_dir)
+    return _subtitles_from_media(info, media, max_chars, url, "抖音视频")
 
-    cues = asr.get("cues") or []
-    if not cues:
-        raise YtdlpError("语音转写结果为空，无法生成总结。", status_code=422)
-    transcript = cues_to_transcript(cues, max_chars)
-    return {
-        "title": info.get("title") or "抖音视频",
-        "language": asr.get("language") or "zh",
-        "source": "asr",
-        "cues": cues,
-        "transcript": transcript,
-        "webpage_url": info.get("webpage_url") or url,
-        "asr_engine": asr.get("engine"),
-    }
+
+def _is_youtube_url(url: str) -> bool:
+    host = (urlparse(url).hostname or "").lower()
+    return host == "youtu.be" or host.endswith("youtube.com") or host.endswith("youtube-nocookie.com")
+
+
+def _download_youtube_audio(url: str) -> Path:
+    """Lowest audio track is enough for speech-to-text."""
+    job_dir = TEMP_DIR / str(uuid.uuid4())
+    job_dir.mkdir(parents=True, exist_ok=True)
+    opts = _base_opts()
+    opts.update(
+        {
+            "format": "worstaudio/bestaudio/worst",
+            "outtmpl": str(job_dir / "audio.%(ext)s"),
+            "noplaylist": True,
+            "max_filesize": 80 * 1024 * 1024,
+        }
+    )
+    try:
+        with YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except (DownloadError, ExtractorError) as exc:
+        remove_dir(job_dir)
+        logger.warning("youtube audio download failed: %s", exc)
+        raise YtdlpError("下载音频失败，暂时无法转写这条 YouTube 视频。", status_code=422) from exc
+    except Exception as exc:
+        remove_dir(job_dir)
+        logger.exception("youtube audio download error")
+        raise YtdlpError("下载音频失败：{}".format(exc), status_code=500) from exc
+
+    files = [
+        p
+        for p in job_dir.iterdir()
+        if p.is_file() and p.suffix.lower() not in {".json", ".part", ".ytdl", ".temp"}
+    ]
+    if not files:
+        remove_dir(job_dir)
+        raise YtdlpError("没有下载到音频，暂时无法转写这条 YouTube 视频。", status_code=422)
+    return max(files, key=lambda p: p.stat().st_size)
+
+
+def _fetch_youtube_subtitles_via_asr(
+    url: str,
+    max_chars: int,
+    info: Dict[str, Any],
+) -> Dict[str, Any]:
+    if not asr_available():
+        raise YtdlpError(
+            "这条 YouTube 视频没有字幕轨，需要云端语音转写才能生成字幕。"
+            "未配置云端 ASR：请设置 ASR_PROVIDER=api 与 ASR_API_KEY。",
+            status_code=503,
+        )
+    media = _download_youtube_audio(url)
+    return _subtitles_from_media(info, media, max_chars, url, info.get("title") or "YouTube 视频")
+
+
+def _fetch_xiaohongshu_subtitles_via_asr(url: str, max_chars: int) -> Dict[str, Any]:
+    """Xiaohongshu notes have no caption file; transcribe the video instead."""
+    if not asr_available():
+        raise YtdlpError(
+            "小红书笔记没有独立字幕轨，需要云端语音转写才能生成字幕。"
+            "未配置云端 ASR：请设置 ASR_PROVIDER=api 与 ASR_API_KEY。",
+            status_code=503,
+        )
+    info = fetch_xiaohongshu_info(url)
+    media = download_xiaohongshu(url)
+    return _subtitles_from_media(info, media, max_chars, url, "小红书笔记")
 
 
 def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
@@ -444,6 +569,8 @@ def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
         return demo_subtitles(max_chars)
     if is_douyin_url(url):
         return _fetch_douyin_subtitles_via_asr(url, max_chars)
+    if is_xiaohongshu_url(url):
+        return _fetch_xiaohongshu_subtitles_via_asr(url, max_chars)
 
     # B站：云服务器访问网页常 412，直接走公开字幕 API（含 AI 字幕）
     if is_bilibili_url(url):
@@ -489,48 +616,36 @@ def fetch_subtitles(url: str, max_chars: int) -> Dict[str, Any]:
     title = info.get("title") or "未命名视频"
     manual = info.get("subtitles") or {}
     auto = info.get("automatic_captions") or {}
+    attempts = [("manual", manual), ("auto", auto)]
+    last_error = ""
+    for source, tracks in attempts:
+        for lang, track in _caption_candidates(tracks):
+            try:
+                cues = _cues_from_track(track)
+            except Exception as exc:
+                last_error = str(exc)
+                logger.warning("download subtitle failed (%s %s): %s", source, lang, exc)
+                continue
+            if not cues:
+                continue
+            transcript = cues_to_transcript(cues, max_chars)
+            return {
+                "title": title,
+                "language": lang,
+                "source": source,
+                "cues": cues,
+                "transcript": transcript,
+                "webpage_url": info.get("webpage_url") or url,
+            }
 
-    picked = _pick_track(manual)
-    source = "manual"
-    if not picked:
-        picked = _pick_track(auto)
-        source = "auto"
-
-    if not picked:
-        packed = _pack_bilibili_subtitles(url, max_chars)
-        if packed:
-            return packed
-        raise YtdlpError(
-            "该视频没有可用字幕。v1 仅支持已有字幕/自动字幕的视频，暂不提供语音转写。",
-            status_code=422,
-        )
-
-    lang, track = picked
-    sub_url = track.get("url")
-    if not sub_url:
-        raise YtdlpError("字幕地址无效", status_code=422)
-
-    try:
-        raw = _download_url(sub_url)
-    except Exception as exc:
-        logger.warning("download subtitle failed: %s", exc)
+    packed = _pack_bilibili_subtitles(url, max_chars)
+    if packed:
+        return packed
+    if _is_youtube_url(url):
+        return _fetch_youtube_subtitles_via_asr(url, max_chars, info)
+    if last_error:
         raise YtdlpError("下载字幕失败，请稍后重试。", status_code=502)
-
-    ext = (track.get("ext") or "").lower()
-    if ext == "json3":
-        cues = _parse_json3(raw)
-    else:
-        cues = parse_vtt_or_srt(raw)
-
-    if not cues:
-        raise YtdlpError("字幕内容为空或无法解析。", status_code=422)
-
-    transcript = cues_to_transcript(cues, max_chars)
-    return {
-        "title": title,
-        "language": lang,
-        "source": source,
-        "cues": cues,
-        "transcript": transcript,
-        "webpage_url": info.get("webpage_url") or url,
-    }
+    raise YtdlpError(
+        "该视频没有可用字幕。v1 仅支持已有字幕/自动字幕的视频，暂不提供语音转写。",
+        status_code=422,
+    )

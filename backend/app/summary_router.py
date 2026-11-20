@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from urllib.parse import quote
 
 from fastapi import APIRouter, Request
@@ -15,7 +14,7 @@ from .limiter import rate_limiter
 from .llm_service import llm_configured
 from .membership import is_vip_user
 from .summary_config import FREE_DAILY_SUMMARIES, MAX_SUMMARY_CHARS
-from .summary_jobs import ask_job, ask_job_stream, create_job, get_job
+from .summary_jobs import ask_job, ask_job_stream, create_job, get_job, iter_summary_sse
 from .summary_quota import consume_summary_quota, remaining_for_ip, remaining_for_user
 from .subtitle_service import export_subtitles, fetch_subtitles
 from .ytdlp_service import YtdlpError, validate_url
@@ -136,50 +135,33 @@ def api_summarize_events(job_id: str):
     """
 
     def event_stream():
-        last = None
-        # Keepalive comment every ~15s so proxies/browsers do not drop the stream
-        # while status stays on fetching_subtitles / summarizing.
-        deadline = time.time() + 300  # 5 minutes
-        last_ping = time.time()
-        while time.time() < deadline:
-            job = get_job(job_id)
-            if not job:
+        # Each LLM token is its own SSE event. Do not buffer into snapshots.
+        for kind, payload in iter_summary_sse(job_id):
+            if kind == "keepalive":
+                yield ": keepalive\n\n"
+                continue
+            if kind == "delta":
+                yield "event: delta\ndata: {}\n\n".format(
+                    json.dumps(payload, ensure_ascii=False)
+                )
+                continue
+            if kind == "timeout":
                 yield "event: error\ndata: {}\n\n".format(
-                    json.dumps({"detail": "任务不存在或已过期"}, ensure_ascii=False)
+                    json.dumps(payload, ensure_ascii=False)
                 )
                 return
-            payload = {
-                "job_id": job["id"],
-                "status": job["status"],
-                "stage": job.get("stage"),
-                "result": job.get("result"),
-                "stream_markdown": job.get("stream_markdown") or "",
-                "error": job.get("error"),
-            }
-            blob = json.dumps(payload, ensure_ascii=False)
-            if blob != last:
-                last = blob
-                yield "event: update\ndata: {}\n\n".format(blob)
-            elif time.time() - last_ping >= 15:
-                # SSE comment — does not change UI, resets proxy idle timers
-                yield ": keepalive\n\n"
-                last_ping = time.time()
-            if job["status"] in ("done", "failed"):
-                yield "event: end\ndata: {}\n\n".format(blob)
+            if kind == "error":
+                yield "event: error\ndata: {}\n\n".format(
+                    json.dumps(payload, ensure_ascii=False)
+                )
                 return
-            time.sleep(0.5)
-
-        # Still running after deadline: soft signal (frontend should keep polling)
-        yield "event: error\ndata: {}\n\n".format(
-            json.dumps(
-                {
-                    "detail": "任务仍在后台处理，可继续刷新或凭 job_id 恢复查询",
-                    "job_id": job_id,
-                    "soft_timeout": True,
-                },
-                ensure_ascii=False,
+            event_name = "end" if kind == "end" else "update"
+            yield "event: {}\ndata: {}\n\n".format(
+                event_name,
+                json.dumps(payload, ensure_ascii=False),
             )
-        )
+            if kind in ("sync", "end") and (payload or {}).get("status") in ("done", "failed"):
+                return
 
     return StreamingResponse(
         event_stream(),

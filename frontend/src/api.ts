@@ -11,7 +11,7 @@ async function readError(res: Response): Promise<string> {
 }
 
 export async function fetchHealth(): Promise<HealthInfo> {
-  const res = await fetch('/api/health')
+  const res = await fetch('/api/health', { credentials: 'include' })
   if (!res.ok) throw new Error(await readError(res))
   return res.json()
 }

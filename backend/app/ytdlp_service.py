@@ -29,6 +29,12 @@ from .douyin_service import (
     fetch_douyin_info,
     is_douyin_url,
 )
+from .xiaohongshu_service import (
+    XiaohongshuError,
+    download_xiaohongshu,
+    fetch_xiaohongshu_info,
+    is_xiaohongshu_url,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +125,9 @@ def _base_opts():
     bili_cookie = _bili_cookie_header()
     if bili_cookie:
         opts["http_headers"]["Cookie"] = bili_cookie
+    node = shutil.which("node")
+    if node:
+        opts["js_runtimes"] = {"node": {"path": str(Path(node).resolve().parent)}}
     return opts
 
 
@@ -361,6 +370,7 @@ def extract_info(url):
         try:
             info = fetch_douyin_info(url)
             info.pop("_douyin_play_urls", None)
+            info.pop("_douyin_play_map", None)
             return info
         except DouyinError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
@@ -371,6 +381,15 @@ def extract_info(url):
             info.pop("_bilibili_play", None)
             return info
         except BilibiliError as exc:
+            raise YtdlpError(exc.message, status_code=exc.status_code) from exc
+
+    if is_xiaohongshu_url(url):
+        try:
+            info = fetch_xiaohongshu_info(url)
+            info.pop("_xhs_play_urls", None)
+            info.pop("_xhs_play_map", None)
+            return info
+        except XiaohongshuError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
 
     opts = _base_opts()
@@ -409,7 +428,7 @@ def extract_info(url):
 def download_video(url, format_id):
     if is_douyin_url(url):
         try:
-            return download_douyin(url)
+            return download_douyin(url, format_id=format_id)
         except DouyinError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
 
@@ -417,6 +436,12 @@ def download_video(url, format_id):
         try:
             return download_bilibili(url, format_id)
         except BilibiliError as exc:
+            raise YtdlpError(exc.message, status_code=exc.status_code) from exc
+
+    if is_xiaohongshu_url(url):
+        try:
+            return download_xiaohongshu(url, format_id=format_id)
+        except XiaohongshuError as exc:
             raise YtdlpError(exc.message, status_code=exc.status_code) from exc
 
     job_dir = TEMP_DIR / str(uuid.uuid4())

@@ -27,4 +27,6 @@ export type HealthInfo = {
   yt_dlp: string
   ffmpeg: boolean
   free_daily_parses: number
+  remaining_parses?: number | null
+  is_vip?: boolean
 }

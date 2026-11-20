@@ -147,6 +147,71 @@ function StreamingCursor() {
   return <span className="ml-0.5 inline-block h-4 w-1 animate-pulse bg-brand align-middle" />
 }
 
+/** Live notes while the model is still writing. Headings stay document-style. */
+function StreamingSummary({ markdown }: { markdown: string }) {
+  const endRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const node = endRef.current
+    if (!node) return
+    const frame = window.requestAnimationFrame(() => {
+      node.scrollIntoView({ block: 'nearest' })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [markdown])
+
+  const blocks = useMemo(() => {
+    const nodes: ReactNode[] = []
+    let paragraph: string[] = []
+    const flush = () => {
+      const text = cleanText(paragraph.join(' '))
+      paragraph = []
+      if (!text) return
+      nodes.push(
+        <p key={nodes.length} className="text-ink/85">
+          {text}
+        </p>,
+      )
+    }
+    for (const raw of markdown.replace(/\r/g, '').split('\n')) {
+      const heading = raw.match(/^#{1,3}\s+(.+)$/)
+      if (heading) {
+        flush()
+        nodes.push(<SectionTitle key={nodes.length}>{cleanText(heading[1])}</SectionTitle>)
+        continue
+      }
+      const item = raw.match(/^\s*(?:\d+[.、]|[-*•])\s+(.+)$/)
+      if (item) {
+        flush()
+        nodes.push(
+          <p key={nodes.length} className="pl-1 text-ink/85">
+            {cleanText(item[1])}
+          </p>,
+        )
+        continue
+      }
+      if (!raw.trim()) {
+        flush()
+        continue
+      }
+      paragraph.push(raw)
+    }
+    flush()
+    return nodes
+  }, [markdown])
+
+  return (
+    <div className="space-y-4 text-left text-[15px] leading-7 text-ink/90">
+      {blocks}
+      <p className="text-sm text-brand">
+        正在生成
+        <StreamingCursor />
+      </p>
+      <div ref={endRef} />
+    </div>
+  )
+}
+
 function SectionTitle({ children }: { children: ReactNode }) {
   return (
     <h3 className="mb-3 text-[1.05rem] font-bold tracking-tight text-ink sm:text-lg">{children}</h3>
@@ -631,12 +696,14 @@ export function SummaryPanel({
   demoMode = false,
 }: Props) {
   const [tab, setTab] = useState<TabId>('summary')
+  const liveMarkdown = (streamMarkdown || result?.stream_markdown || '').trim()
+  const showStream = loading && tab === 'summary' && !!liveMarkdown
   const hasPartial =
     !!result &&
     (!!result.overview ||
       (result.outline && result.outline.length > 0) ||
       !!result.cues?.length ||
-      !!streamMarkdown)
+      !!liveMarkdown)
 
   const shellClass = embedded
     ? 'flex min-h-0 flex-1 flex-col overflow-hidden'
@@ -673,7 +740,7 @@ export function SummaryPanel({
       </div>
 
       <div className={embedded ? 'max-h-[32rem] overflow-y-auto py-3 lg:max-h-[36rem]' : 'px-4 py-4 sm:px-5'}>
-        {loading && !hasPartial && (
+        {loading && !hasPartial && !showStream && (
           <div className="rounded-xl border border-dashed border-brand/30 bg-brand/5 px-4 py-6 text-center text-sm text-brand">
             {stageLabel(stage)}
           </div>
@@ -703,12 +770,10 @@ export function SummaryPanel({
           </div>
         )}
 
-        {(hasPartial || (!loading && result)) && tab === 'summary' && result && (
-          <SummaryBody
-            result={result}
-            streamMarkdown={streamMarkdown}
-            streaming={loading}
-          />
+        {showStream && <StreamingSummary markdown={liveMarkdown} />}
+
+        {!showStream && (hasPartial || (!loading && result)) && tab === 'summary' && result && (
+          <SummaryBody result={result} streaming={loading} />
         )}
 
         {tab === 'transcript' && (

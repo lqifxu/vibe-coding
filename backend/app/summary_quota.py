@@ -3,13 +3,12 @@
 Branches:
 - VIP user: unlimited (no consume)
 - Logged-in free user: per user_id day counter in SQLite
-- Anonymous: per IP in-memory counter (legacy)
+- Anonymous: per IP day counter in SQLite
 """
 from __future__ import annotations
 
-import threading
 import time
-from typing import Dict, Optional, Tuple
+from typing import Optional
 
 from . import db
 from .limiter import RateLimitError
@@ -18,34 +17,26 @@ from .summary_config import FREE_DAILY_SUMMARIES
 
 
 class SummaryQuota:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._daily: Dict[str, Tuple[str, int]] = {}
-
     def remaining_for_ip(self, ip: str) -> int:
         today = time.strftime("%Y-%m-%d")
-        with self._lock:
-            day, count = self._daily.get(ip, (today, 0))
-            if day != today:
-                count = 0
-            return max(0, FREE_DAILY_SUMMARIES - count)
+        used = db.get_daily_usage("summary", "ip:{}".format(ip or "unknown"), today)
+        return max(0, FREE_DAILY_SUMMARIES - used)
 
     def check_and_consume(self, ip: str) -> int:
         today = time.strftime("%Y-%m-%d")
-        with self._lock:
-            day, count = self._daily.get(ip, (today, 0))
-            if day != today:
-                count = 0
-                day = today
-            if count >= FREE_DAILY_SUMMARIES:
-                raise RateLimitError(
-                    "今日免费 AI 总结次数已用完（每日 {} 次）。升级 Pro 可解锁无限解析与 AI 总结。".format(
-                        FREE_DAILY_SUMMARIES
-                    )
+        remaining = db.consume_daily_usage(
+            "summary",
+            "ip:{}".format(ip or "unknown"),
+            today,
+            FREE_DAILY_SUMMARIES,
+        )
+        if remaining is None:
+            raise RateLimitError(
+                "今日免费 AI 总结次数已用完（每日 {} 次）。升级 Pro 可解锁无限解析与 AI 总结。".format(
+                    FREE_DAILY_SUMMARIES
                 )
-            count += 1
-            self._daily[ip] = (day, count)
-            return FREE_DAILY_SUMMARIES - count
+            )
+        return remaining
 
     def check_and_consume_user(self, user_id: int) -> int:
         today = time.strftime("%Y-%m-%d")

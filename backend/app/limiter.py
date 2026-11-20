@@ -1,11 +1,12 @@
-"""Lightweight IP rate limiter and daily parse counter (in-memory, no DB)."""
+"""IP burst limiter plus a persisted daily parse counter."""
 from __future__ import annotations
 
 import threading
 import time
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
+from . import db
 from .config import (
     FREE_DAILY_PARSES,
     MAX_CONCURRENT_DOWNLOADS,
@@ -22,7 +23,6 @@ class RateLimiter:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._hits = defaultdict(list)  # type: Dict[str, List[float]]
-        self._daily = {}  # type: Dict[str, Tuple[str, int]]
 
     def check_rate(self, ip: str) -> None:
         now = time.time()
@@ -35,22 +35,22 @@ class RateLimiter:
                 )
             self._hits[ip].append(now)
 
-    def check_daily_parse(self, ip: str) -> int:
+    def remaining_daily_parse(self, subject: str) -> int:
+        """Remaining free parses today. Does not consume a credit."""
         today = time.strftime("%Y-%m-%d")
-        with self._lock:
-            day, count = self._daily.get(ip, (today, 0))
-            if day != today:
-                count = 0
-                day = today
-            if count >= FREE_DAILY_PARSES:
-                raise RateLimitError(
-                    "今日免费解析次数已用完（每日 {} 次）。升级 Pro 可解锁无限解析与 AI 总结。".format(
-                        FREE_DAILY_PARSES
-                    )
+        used = db.get_daily_usage("parse", subject, today)
+        return max(0, FREE_DAILY_PARSES - used)
+
+    def check_daily_parse(self, subject: str) -> int:
+        today = time.strftime("%Y-%m-%d")
+        remaining = db.consume_daily_usage("parse", subject, today, FREE_DAILY_PARSES)
+        if remaining is None:
+            raise RateLimitError(
+                "今日免费解析次数已用完（每日 {} 次）。升级 Pro 可解锁无限解析与 AI 总结。".format(
+                    FREE_DAILY_PARSES
                 )
-            count += 1
-            self._daily[ip] = (day, count)
-            return FREE_DAILY_PARSES - count
+            )
+        return remaining
 
 
 rate_limiter = RateLimiter()

@@ -36,7 +36,7 @@ export function useVideoSummary() {
   const applyJob = useCallback(
     (job: SummaryJob) => {
       setSummaryStage(job.stage ?? null)
-      if (job.stream_markdown) setStreamMarkdown(job.stream_markdown)
+      if (typeof job.stream_markdown === 'string') setStreamMarkdown(job.stream_markdown)
       if (job.result) setSummaryResult(job.result)
       if (job.status === 'done') {
         setSummarizing(false)
@@ -85,6 +85,7 @@ export function useVideoSummary() {
           setSummarizing(true)
           clearSub()
           unsubRef.current = subscribeSummarizeEvents(saved, {
+            onDelta: (delta) => setStreamMarkdown((prev) => prev + delta),
             onUpdate: applyJob,
             onError: (msg, meta) => {
               if (meta?.softTimeout) {
@@ -149,6 +150,7 @@ export function useVideoSummary() {
           setRemainingSummaries(started.remaining_summaries)
         }
         unsubRef.current = subscribeSummarizeEvents(started.job_id, {
+          onDelta: (delta) => setStreamMarkdown((prev) => prev + delta),
           onUpdate: applyJob,
           onError: (msg, meta) => {
             if (meta?.softTimeout) {

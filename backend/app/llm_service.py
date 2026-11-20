@@ -524,8 +524,9 @@ def summarize_transcript_streaming(
     title: str,
     transcript: str,
     on_partial: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    on_delta: Optional[Callable[[str], None]] = None,
 ) -> Dict[str, Any]:
-    """Stream Markdown notes; call on_partial(md, partial_result) as tokens arrive."""
+    """Stream Markdown notes. on_delta(token) fires per chunk; parsing happens once at the end."""
     if not LLM_API_KEY:
         raise YtdlpError(
             "未配置 LLM_API_KEY（或 DEEPSEEK_API_KEY），无法生成 AI 总结。",
@@ -555,9 +556,8 @@ def summarize_transcript_streaming(
             if not delta:
                 continue
             buf.append(delta)
-            text = "".join(buf)
-            if on_partial:
-                on_partial(text, parse_summary_markdown(text, title))
+            if on_delta:
+                on_delta(delta)
     except AuthenticationError as exc:
         raise YtdlpError("LLM API 鉴权失败，请检查 LLM_API_KEY / DEEPSEEK_API_KEY。", status_code=503) from exc
     except APIConnectionError as exc:

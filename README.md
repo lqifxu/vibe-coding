@@ -1,9 +1,9 @@
 # 极速下 — 万能视频下载网站
 
 粘贴视频链接或分享口令 → 解析清晰度 → 下载到本地（手机 / 电脑均可）。  
-同页支持 **AI 视频总结**（字幕或抖音云端 ASR → 流式摘要 / 大纲 / 要点 / 总结 + 字幕文本 + 思维导图图片 + AI 问答）。
+同页支持 **AI 视频总结**（平台字幕，或无字幕轨时的云端语音转写 → 流式摘要 / 大纲 / 要点 / 总结 + 字幕文本 + 思维导图图片 + AI 问答）。
 
-下载引擎基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp)；抖音走独立无 Cookie 分享页解析，无字幕时用 **OpenAI 兼容 Whisper API** 转写后再总结。账号与 Pro 订阅使用本地 SQLite + Stripe。
+下载引擎基于 [yt-dlp](https://github.com/yt-dlp/yt-dlp)。抖音、小红书走独立解析（无需用户 Cookie）。没有字幕轨时（抖音、小红书，以及部分 YouTube）用 **OpenAI 兼容语音转写** 生成文稿后再总结。账号、订阅和每日免费次数使用本地 SQLite + Stripe。
 
 更完整的设计取舍与验收记录见：[docs/项目总结.md](docs/项目总结.md)  
 AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方案.md)  
@@ -22,7 +22,7 @@ AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方
   - **思维导图**：彩色曲线导图，支持全屏缩放拖拽与 2× 高清 PNG 下载
   - **AI 问答**：基于本视频字幕上下文提问，流式回答
 - **独立下载字幕**：解析结果区可直接下载字幕文件（不调 LLM、不扣总结配额）
-- IP 限流 + 每日免费解析（内存，默认 10）；AI 总结：匿名按 IP、登录免费用户按账号（默认 10）；Pro 两者均无限
+- 短时请求限流仍在内存；每日免费解析与 AI 总结写入 SQLite（登录按账号，未登录按 IP，刷新页面不会恢复次数）；Pro 两者均无限
 
 ## 环境要求
 
@@ -30,7 +30,8 @@ AI 总结技术细节见：[docs/AI视频总结方案.md](docs/AI视频总结方
 - **Node.js 18+**
 - **ffmpeg**（强烈建议；高清音视频合并需要）
 - **LLM 密钥**（AI 总结需要；默认对接 DeepSeek）
-- **ASR 密钥**（抖音 AI 总结需要；OpenAI 兼容网关，如 SiliconFlow；见 `backend/.env.example`）
+- **ASR 密钥**（抖音、小红书，以及没有字幕轨的 YouTube 需要；OpenAI 兼容网关，如 SiliconFlow；见 `backend/.env.example`）
+- **Node.js**（拉取 YouTube 官方字幕时，yt-dlp 要用它跑播放器脚本；没有字幕轨时仍可走语音转写）
 
 ## 快速启动
 
@@ -118,7 +119,16 @@ VITE_SITE_URL=http://localhost:5173
 | 网页弹窗地址 | `https://www.douyin.com/jingxuan?modal_id=数字ID` |
 
 **不要**复制无视频 ID 的推荐页，例如 `https://www.douyin.com/?recommend=1`。  
-抖音解析**无需登录、无需填写 Cookie**。抖音暂不支持 AI 总结（缺可用字幕）。
+抖音解析**无需登录、无需填写 Cookie**。没有官方字幕时，配置 `ASR_*` 后可用语音转写做 AI 总结。
+
+## 小红书取链说明
+
+| 可用 | 说明 |
+|------|------|
+| 分享短链 | `xhslink.com` / `xhs.cn` |
+| 笔记页 | `xiaohongshu.com/explore/{id}`，需带当前有效的 `xsec_token` |
+
+只支持**视频笔记**。图文笔记、以及需要登录才能看的笔记会明确报错。笔记页没有独立字幕文件，总结和「下载字幕」走语音转写。
 
 ## API
 
@@ -126,7 +136,7 @@ VITE_SITE_URL=http://localhost:5173
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/health` | yt-dlp / ffmpeg / 免费解析配额状态 |
+| GET | `/api/health` | yt-dlp / ffmpeg / ASR，以及今日剩余解析次数 `remaining_parses` |
 | POST | `/api/info` | Body `{ "url" }` → 标题、封面、清晰度 |
 | POST | `/api/download` | Body `{ "url", "format_id" }` → 文件流 |
 
@@ -162,7 +172,7 @@ VITE_SITE_URL=http://localhost:5173
 | `RATE_LIMIT_REQUESTS` | 30 | 窗口内请求上限 |
 | `RATE_LIMIT_WINDOW_SEC` | 60 | 限流窗口秒数 |
 | `MAX_CONCURRENT_DOWNLOADS` | 3 | 并发下载数 |
-| `FREE_DAILY_PARSES` | `10`（`.env`；代码默认 999） | 每 IP 每日免费解析次数；Pro 无限 |
+| `FREE_DAILY_PARSES` | `10`（`.env`；代码默认 999） | 每日免费解析次数（登录按账号，未登录按 IP，存在 SQLite）；Pro 无限 |
 | `TEMP_FILE_TTL_SEC` | 3600 | 临时目录保留时间 |
 | `FFMPEG_PATH` | 空（可另用 `ffmpeg.path` 文件） | ffmpeg 目录或可执行文件路径 |
 
@@ -189,7 +199,7 @@ AI 总结相关（`backend/.env`，参考 `.env.example`）：
 
 1. 在 `backend/.env` 配置 `LLM_API_KEY`（或 `DEEPSEEK_API_KEY`）
 2. 前端粘贴链接并解析；**解析成功后自动开始 AI 总结**（左右同屏展示）
-3. 后端拉取字幕（yt-dlp → B 站 `dm/view` AI 字幕免登录回退等）→ **流式**生成 Markdown 笔记
+3. 后端拉取字幕（B 站开放 API、YouTube 官方/自动字幕；抖音、小红书，以及没有字幕轨的 YouTube 走语音转写）→ **逐字 SSE** 生成 Markdown 笔记
 4. 右侧四个 Tab：
    - 总结摘要（逐字打出）
    - 字幕文本
@@ -211,11 +221,11 @@ cd backend
 
 - 部分平台风控 / 网络环境可能导致失败，失败时返回友好错误
 - 未配置 ffmpeg 时，「需合并音轨」的高清格式可能失败
-- 下载解析配额仍为内存级 IP 限流；账号与订阅在 SQLite
+- 每日免费解析与总结记在 SQLite，按自然日计算；刷新页面不会把次数加满。短时频率限制仍在内存中
 - 大文件会占用服务器临时磁盘与带宽
-- AI 总结依赖字幕：无字幕且无 AI 自动字幕时会报错（v1 不含 ASR 语音转写）
-- 抖音等平台暂不支持总结
-- YouTube 等在部分网络下可能超时
+- 抖音、小红书，以及没有字幕轨的 YouTube，依赖云端 `ASR_*` 与 ffmpeg；未配置时会说明无法转写
+- B 站没有字幕（含 AI 字幕）时不做整片语音转写
+- YouTube 官方字幕优先用原文轨；翻译轨经常被限流。部分网络下解析可能超时
 - Stripe 真实扣款需账号与网络；本地 webhook 依赖 Stripe CLI
 
 ## 目录结构
@@ -226,7 +236,9 @@ backend/app/                 # FastAPI 下载核心 + 总结 + 账号计费
   auth_router.py / db.py     # 注册登录、SQLite
   billing_router.py          # Stripe Checkout / webhook / portal
   summary_router.py          # 总结 / SSE / 问答 API
-  subtitle_service.py        # 字幕拉取与解析
+  subtitle_service.py        # 字幕拉取；无字幕轨时转语音转写
+  douyin_service.py          # 抖音无 Cookie 解析
+  xiaohongshu_service.py     # 小红书视频笔记解析
   llm_service.py             # DeepSeek 等 LLM（流式总结 / 问答）
   summary_jobs.py            # 内存异步 Job
 frontend/

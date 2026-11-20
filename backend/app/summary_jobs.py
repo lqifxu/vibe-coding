@@ -5,7 +5,8 @@ import logging
 import threading
 import time
 import uuid
-from typing import Any, Dict, Optional
+from collections import deque
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 from .summary_config import (
     MAX_CONCURRENT_SUMMARIES,
@@ -54,7 +55,7 @@ def create_job(url: str) -> str:
     job_id = str(uuid.uuid4())
     with _lock:
         _purge_expired()
-        _jobs[job_id] = {
+        job = {
             "id": job_id,
             "url": url,
             "status": "queued",
@@ -64,10 +65,36 @@ def create_job(url: str) -> str:
             "stream_markdown": "",
             "transcript": "",
             "created_at": time.time(),
+            "events": deque(maxlen=8000),
+            "event_seq": 0,
         }
+        job["cond"] = threading.Condition(_lock)
+        _jobs[job_id] = job
     thread = threading.Thread(target=_run_job, args=(job_id,), daemon=True)
     thread.start()
     return job_id
+
+
+def _public_view(job: Dict[str, Any], include_markdown: bool = False) -> Dict[str, Any]:
+    result = job.get("result")
+    view = {
+        "job_id": job["id"],
+        "status": job["status"],
+        "stage": job.get("stage"),
+        "result": dict(result) if isinstance(result, dict) else result,
+        "error": job.get("error"),
+    }
+    if include_markdown:
+        view["stream_markdown"] = job.get("stream_markdown") or ""
+    return view
+
+
+def _publish_locked(job: Dict[str, Any], kind: str, data: Any) -> None:
+    job["event_seq"] = int(job.get("event_seq") or 0) + 1
+    job["events"].append((job["event_seq"], kind, data))
+    cond = job.get("cond")
+    if cond is not None:
+        cond.notify_all()
 
 
 def _update(job_id: str, **fields: Any) -> None:
@@ -76,6 +103,94 @@ def _update(job_id: str, **fields: Any) -> None:
         if not job:
             return
         job.update(fields)
+        done = job.get("status") in ("done", "failed")
+        _publish_locked(job, "status", _public_view(job, include_markdown=done))
+
+
+def publish_delta(job_id: str, delta: str) -> None:
+    if not delta:
+        return
+    with _lock:
+        job = _jobs.get(job_id)
+        if not job:
+            return
+        job["stream_markdown"] = (job.get("stream_markdown") or "") + delta
+        result = job.get("result")
+        if isinstance(result, dict):
+            result["stream_markdown"] = job["stream_markdown"]
+        _publish_locked(job, "delta", delta)
+
+
+def iter_summary_sse(job_id: str, deadline_sec: float = 300) -> Iterator[Tuple[str, Any]]:
+    """Push sync, then each token as soon as it is published. No polling."""
+    deadline = time.time() + deadline_sec
+    with _lock:
+        _purge_expired()
+        job = _jobs.get(job_id)
+        if not job:
+            sync = None
+            last_seq = 0
+        else:
+            last_seq = int(job.get("event_seq") or 0)
+            sync = _public_view(job, include_markdown=True)
+    if sync is None:
+        yield ("error", {"detail": "任务不存在或已过期"})
+        return
+    yield ("sync", sync)
+    if sync.get("status") in ("done", "failed"):
+        return
+
+    while time.time() < deadline:
+        with _lock:
+            job = _jobs.get(job_id)
+            if not job:
+                missing = True
+                fresh = []
+                status = None
+            else:
+                missing = False
+                fresh = [item for item in job["events"] if item[0] > last_seq]
+                if not fresh and job.get("status") not in ("done", "failed"):
+                    remaining = max(0.05, min(15.0, deadline - time.time()))
+                    job["cond"].wait(timeout=remaining)
+                    fresh = [item for item in job["events"] if item[0] > last_seq]
+                status = job.get("status")
+        if missing:
+            yield ("error", {"detail": "任务不存在或已过期"})
+            return
+        if fresh:
+            for seq, kind, data in fresh:
+                last_seq = seq
+                if kind == "delta":
+                    yield ("delta", {"delta": data})
+                    continue
+                view = data if isinstance(data, dict) else {}
+                if view.get("status") in ("done", "failed"):
+                    yield ("end", view)
+                    return
+                yield ("status", view)
+            if status in ("done", "failed"):
+                return
+            continue
+        if status in ("done", "failed"):
+            with _lock:
+                job = _jobs.get(job_id)
+                view = _public_view(job, include_markdown=True) if job else None
+            if view:
+                yield ("end", view)
+            return
+        if time.time() >= deadline:
+            break
+        yield ("keepalive", None)
+
+    yield (
+        "timeout",
+        {
+            "detail": "任务仍在后台处理，可继续刷新或凭 job_id 恢复查询",
+            "job_id": job_id,
+            "soft_timeout": True,
+        },
+    )
 
 
 def _merge_result(job_id: str, patch: Dict[str, Any], stream_markdown: str = "") -> None:
@@ -173,23 +288,11 @@ def _run_job(job_id: str) -> None:
             result=base_result,
         )
 
-        def on_partial(md: str, partial: Dict[str, Any]) -> None:
-            _merge_result(
-                job_id,
-                {
-                    "title": base_result["title"],
-                    "overview": partial.get("overview") or "",
-                    "outline": partial.get("outline") or [],
-                    "highlights": partial.get("highlights") or [],
-                    "conclusion": partial.get("conclusion") or "",
-                    "summary": partial.get("overview") or "",
-                },
-                stream_markdown=md,
-            )
-
         try:
             summary = summarize_transcript_streaming(
-                sub["title"], sub["transcript"], on_partial=on_partial
+                sub["title"],
+                sub["transcript"],
+                on_delta=lambda delta: publish_delta(job_id, delta),
             )
         except YtdlpError as exc:
             _update(job_id, status="failed", error=exc.message, stage=None)

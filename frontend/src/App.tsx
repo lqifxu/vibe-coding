@@ -32,8 +32,10 @@ export default function App() {
   useEffect(() => {
     fetchHealth()
       .then((h) => {
-        setRemaining((prev) => (prev === null ? null : h.free_daily_parses))
         setFfmpegOk(h.ffmpeg)
+        if (h.is_vip || h.remaining_parses === null) setRemaining(null)
+        else if (typeof h.remaining_parses === 'number') setRemaining(h.remaining_parses)
+        else setRemaining(h.free_daily_parses)
       })
       .catch(() => {})
   }, [])

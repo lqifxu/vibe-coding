@@ -72,6 +72,14 @@ def init_db() -> None:
                 PRIMARY KEY (user_id, day)
             );
 
+            CREATE TABLE IF NOT EXISTS daily_usage (
+                kind TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                day TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (kind, subject, day)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_users_stripe_customer
                 ON users(stripe_customer_id);
             """
@@ -229,3 +237,33 @@ def remaining_user_summaries(user_id: int, daily_limit: int) -> int:
     today = time.strftime("%Y-%m-%d")
     count = get_user_summary_count(user_id, today)
     return max(0, daily_limit - count)
+
+
+def get_daily_usage(kind: str, subject: str, day: str) -> int:
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT count FROM daily_usage WHERE kind = ? AND subject = ? AND day = ?",
+            (kind, subject, day),
+        ).fetchone()
+        return int(row["count"]) if row else 0
+
+
+def consume_daily_usage(kind: str, subject: str, day: str, limit: int) -> Optional[int]:
+    """Use one credit. Return remaining, or None when the daily limit is already hit."""
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT count FROM daily_usage WHERE kind = ? AND subject = ? AND day = ?",
+            (kind, subject, day),
+        ).fetchone()
+        used = int(row["count"]) if row else 0
+        if used >= limit:
+            return None
+        count = used + 1
+        conn.execute(
+            """
+            INSERT INTO daily_usage (kind, subject, day, count) VALUES (?, ?, ?, ?)
+            ON CONFLICT(kind, subject, day) DO UPDATE SET count = excluded.count
+            """,
+            (kind, subject, day, count),
+        )
+        return max(0, limit - count)

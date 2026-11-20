@@ -21,6 +21,10 @@ _UA = (
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 "
     "Mobile/15E148 Safari/604.1"
 )
+_FEED_UA = (
+    "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+)
 
 _VIDEO_ID_RE = re.compile(
     r"(?:douyin\.com|iesdouyin\.com)/(?:share/)?video/(?P<id>\d+)",
@@ -52,12 +56,17 @@ def is_douyin_url(url: str) -> bool:
     )
 
 
-def _request(url: str, method: str = "GET", timeout: int = 25) -> Tuple[str, bytes, str]:
+def _request(
+    url: str,
+    method: str = "GET",
+    timeout: int = 25,
+    user_agent: Optional[str] = None,
+) -> Tuple[str, bytes, str]:
     req = urllib.request.Request(
         url,
         method=method,
         headers={
-            "User-Agent": _UA,
+            "User-Agent": user_agent or _UA,
             "Referer": "https://www.douyin.com/",
             "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9",
@@ -157,6 +166,177 @@ def resolve_video_id(url: str) -> str:
     )
 
 
+def _format_size(n: Optional[int]) -> Optional[str]:
+    if not n or n <= 0:
+        return None
+    units = ["B", "KB", "MB", "GB"]
+    size = float(n)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return "{} {}".format(int(size), unit)
+            return "{:.1f} {}".format(size, unit)
+        size /= 1024
+    return None
+
+
+def _url_list(addr: Any) -> List[str]:
+    if not isinstance(addr, dict):
+        return []
+    out: List[str] = []
+    for raw in addr.get("url_list") or []:
+        if not isinstance(raw, str) or not raw.startswith("http"):
+            continue
+        url = raw.replace("/playwm/", "/play/")
+        if url not in out:
+            out.append(url)
+    return out
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fetch_aweme_item(video_id: str) -> Optional[Dict[str, Any]]:
+    """Public feed endpoint still returns the requested aweme without a signature."""
+    api = (
+        "https://aweme.snssdk.com/aweme/v1/feed/"
+        "?aweme_id={}&version_code=280000&app_name=aweme&device_platform=android"
+    ).format(video_id)
+    try:
+        _, data, _ = _request(api, timeout=20, user_agent=_FEED_UA)
+    except DouyinError as exc:
+        logger.warning("douyin feed api failed: %s", exc)
+        return None
+    if not data:
+        return None
+    try:
+        payload = json.loads(data.decode("utf-8", "replace"))
+    except Exception:
+        logger.warning("douyin feed api returned non-json")
+        return None
+    if not isinstance(payload, dict):
+        return None
+    for item in payload.get("aweme_list") or []:
+        if isinstance(item, dict) and str(item.get("aweme_id") or "") == str(video_id):
+            return item
+    return None
+
+
+def _streams_from_video(video: Dict[str, Any], allow_h265: bool) -> List[Dict[str, Any]]:
+    streams: List[Dict[str, Any]] = []
+    for br in video.get("bit_rate") or []:
+        if not isinstance(br, dict):
+            continue
+        if br.get("is_h265") and not allow_h265:
+            continue
+        addr = br.get("play_addr") or {}
+        urls = _url_list(addr)
+        if not urls:
+            continue
+        width = _as_int(addr.get("width"))
+        height = _as_int(addr.get("height"))
+        short = min(width, height) if width and height else (height or width)
+        streams.append(
+            {
+                "short": short,
+                "height": height or None,
+                "bitrate": _as_int(br.get("bit_rate")),
+                "size": _as_int(addr.get("data_size")) or None,
+                "urls": urls,
+            }
+        )
+    return streams
+
+
+def _meta_from_aweme(item: Dict[str, Any], video_id: str) -> Dict[str, Any]:
+    video = item.get("video") if isinstance(item.get("video"), dict) else {}
+    streams = _streams_from_video(video, allow_h265=False)
+    if not streams:
+        streams = _streams_from_video(video, allow_h265=True)
+    if not streams:
+        for key in ("play_addr_h264", "play_addr", "download_addr"):
+            urls = _url_list(video.get(key))
+            if urls:
+                addr = video.get(key) or {}
+                height = _as_int(addr.get("height")) or _as_int(video.get("height"))
+                width = _as_int(addr.get("width")) or _as_int(video.get("width"))
+                short = min(width, height) if width and height else (height or width)
+                streams.append(
+                    {
+                        "short": short,
+                        "height": height or None,
+                        "bitrate": 0,
+                        "size": _as_int(addr.get("data_size")) or None,
+                        "urls": urls,
+                    }
+                )
+                break
+    if not streams:
+        images = item.get("images") or item.get("image_infos")
+        if images:
+            raise DouyinError("这是图文作品，当前只支持视频下载")
+        raise DouyinError("已找到该作品，但没有可下载的视频地址（可能已失效或为直播）")
+
+    best: Dict[int, Dict[str, Any]] = {}
+    for stream in streams:
+        key = stream["short"] or stream["bitrate"] or len(best)
+        prev = best.get(key)
+        if prev is None or stream["bitrate"] > prev["bitrate"]:
+            best[key] = stream
+    ordered = sorted(best.values(), key=lambda s: (s["short"], s["bitrate"]), reverse=True)
+
+    formats: List[Dict[str, Any]] = []
+    play_map: Dict[str, List[str]] = {}
+    for stream in ordered:
+        short = stream["short"] or 0
+        fid = "douyin-{}".format(short) if short else "douyin-play"
+        if fid in play_map:
+            continue
+        size = stream["size"]
+        formats.append(
+            {
+                "format_id": fid,
+                "label": "{}p".format(short) if short else "视频",
+                "ext": "mp4",
+                "height": stream["height"],
+                "has_audio": True,
+                "filesize": size,
+                "filesize_text": _format_size(size),
+                "note": "抖音直链",
+            }
+        )
+        play_map[fid] = stream["urls"]
+    if formats and "douyin-play" not in play_map:
+        play_map["douyin-play"] = play_map[formats[0]["format_id"]]
+
+    cover = None
+    for key in ("origin_cover", "cover", "dynamic_cover"):
+        urls = _url_list(video.get(key))
+        if urls:
+            cover = urls[0]
+            break
+    duration_ms = _as_int(video.get("duration")) or _as_int(item.get("duration"))
+    author = None
+    author_obj = item.get("author")
+    if isinstance(author_obj, dict):
+        author = author_obj.get("nickname") or None
+    title = (item.get("desc") or "").strip() or "抖音视频 {}".format(video_id)
+    return {
+        "id": video_id,
+        "title": title,
+        "uploader": author,
+        "thumbnail": cover,
+        "duration": int(duration_ms / 1000) if duration_ms > 1000 else (duration_ms or None),
+        "formats": formats,
+        "play_map": play_map,
+        "webpage_url": "https://www.douyin.com/video/{}".format(video_id),
+    }
+
+
 def _parse_share_html(html: str, video_id: str) -> Dict[str, Any]:
     html_u = _unescape(html)
 
@@ -233,46 +413,69 @@ def _parse_share_html(html: str, video_id: str) -> Dict[str, Any]:
         "uploader": author,
         "thumbnail": cover,
         "duration": int(duration_ms / 1000) if duration_ms else None,
-        "play_urls": play_urls,
+        "formats": [
+            {
+                "format_id": "douyin-play",
+                "label": "720p",
+                "ext": "mp4",
+                "height": 720,
+                "has_audio": True,
+                "filesize": None,
+                "filesize_text": None,
+                "note": "抖音直链",
+            }
+        ],
+        "play_map": {"douyin-play": play_urls},
         "webpage_url": "https://www.douyin.com/video/{}".format(video_id),
+    }
+
+
+def _public_info(meta: Dict[str, Any]) -> Dict[str, Any]:
+    play_map = meta.get("play_map") or {}
+    flat: List[str] = []
+    for urls in play_map.values():
+        for url in urls:
+            if url not in flat:
+                flat.append(url)
+    return {
+        "id": meta["id"],
+        "title": meta["title"],
+        "thumbnail": meta.get("thumbnail"),
+        "duration": meta.get("duration"),
+        "extractor": "Douyin",
+        "uploader": meta.get("uploader"),
+        "webpage_url": meta.get("webpage_url"),
+        "formats": meta.get("formats") or [],
+        "_douyin_play_map": play_map,
+        "_douyin_play_urls": flat,
     }
 
 
 def fetch_douyin_info(url: str) -> Dict[str, Any]:
     video_id = resolve_video_id(url)
+    item = _fetch_aweme_item(video_id)
+    if item:
+        return _public_info(_meta_from_aweme(item, video_id))
+
     share_url = "https://www.iesdouyin.com/share/video/{}".format(video_id)
     _, data, _ = _request(share_url)
     html = data.decode("utf-8", "replace")
-    meta = _parse_share_html(html, video_id)
-
-    formats = [
-        {
-            "format_id": "douyin-play",
-            "label": "720p",
-            "ext": "mp4",
-            "height": 720,
-            "has_audio": True,
-            "filesize": None,
-            "filesize_text": None,
-            "note": "抖音直链",
-        }
-    ]
-    return {
-        "id": meta["id"],
-        "title": meta["title"],
-        "thumbnail": meta["thumbnail"],
-        "duration": meta["duration"],
-        "extractor": "Douyin",
-        "uploader": meta["uploader"],
-        "webpage_url": meta["webpage_url"],
-        "formats": formats,
-        "_douyin_play_urls": meta["play_urls"],
-    }
+    return _public_info(_parse_share_html(html, video_id))
 
 
-def download_douyin(url: str, dest_dir: Optional[Path] = None) -> Path:
+def download_douyin(
+    url: str,
+    dest_dir: Optional[Path] = None,
+    format_id: Optional[str] = None,
+) -> Path:
     info = fetch_douyin_info(url)
-    play_urls = info.get("_douyin_play_urls") or []
+    play_map = info.get("_douyin_play_map") or {}
+    fid = (format_id or "").strip()
+    play_urls = list(play_map.get(fid) or [])
+    if not play_urls:
+        play_urls = list(play_map.get("douyin-play") or [])
+    if not play_urls:
+        play_urls = list(info.get("_douyin_play_urls") or [])
     job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
     job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -286,7 +489,7 @@ def download_douyin(url: str, dest_dir: Optional[Path] = None) -> Path:
                 play,
                 headers={
                     "User-Agent": _UA,
-                    "Referer": "https://www.iesdouyin.com/",
+                    "Referer": "https://www.douyin.com/",
                 },
             )
             with urllib.request.urlopen(req, timeout=60) as resp:
