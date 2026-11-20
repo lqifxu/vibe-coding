@@ -113,7 +113,7 @@ def health(request: Request):
     remaining = None if vip else rate_limiter.remaining_daily_parse(_parse_subject(user, _client_ip(request)))
     return {
         "ok": True,
-        "code_rev": "20261120c",
+        "code_rev": "20261120d",
         "yt_dlp": ytdlp_version(),
         "ffmpeg": ffmpeg_available(),
         "ffmpeg_detail": check_ffmpeg_cli(),

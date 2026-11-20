@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -180,16 +181,25 @@ def _format_size(n: Optional[int]) -> Optional[str]:
     return None
 
 
-def _url_list(addr: Any) -> List[str]:
-    if not isinstance(addr, dict):
+def _url_list(addr: Any, *, prefer_no_watermark: bool = True) -> List[str]:
+    if isinstance(addr, str) and addr.startswith("http"):
+        raw_list = [addr]
+    elif isinstance(addr, dict):
+        raw_list = list(addr.get("url_list") or [])
+    else:
         return []
     out: List[str] = []
-    for raw in addr.get("url_list") or []:
+    for raw in raw_list:
         if not isinstance(raw, str) or not raw.startswith("http"):
             continue
-        url = raw.replace("/playwm/", "/play/")
+        url = raw.replace("/playwm/", "/play/") if prefer_no_watermark else raw
         if url not in out:
             out.append(url)
+        # Keep watermarked variant too — on cloud IPs it often still has an audio track.
+        if prefer_no_watermark and "/play/" in raw and "/playwm/" not in raw:
+            wm = raw.replace("/play/", "/playwm/")
+            if wm not in out:
+                out.append(wm)
     return out
 
 
@@ -200,28 +210,63 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def _host_resolves(host: str) -> bool:
+    """Prefer IPv4 — many CN cloud VPSes resolve AAAA but cannot route IPv6."""
+    try:
+        socket.getaddrinfo(host, 443, socket.AF_INET)
+        return True
+    except OSError:
+        try:
+            socket.getaddrinfo(host, 443)
+            return True
+        except OSError:
+            return False
+
+
+def _ipv4_fetch_url(url: str) -> Tuple[str, Dict[str, str]]:
+    """Rewrite URL host to IPv4 literal and return extra Host header."""
+    parsed = urllib.parse.urlparse(url)
+    host = parsed.hostname or ""
+    extra: Dict[str, str] = {}
+    if not host:
+        return url, extra
+    try:
+        infos = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
+        ip = infos[0][4][0]
+    except OSError:
+        return url, extra
+    netloc = ip
+    if parsed.port:
+        netloc = "{}:{}".format(ip, parsed.port)
+    extra["Host"] = host
+    return urllib.parse.urlunparse(parsed._replace(netloc=netloc)), extra
+
+
 def _expand_music_cdn(urls: List[str]) -> List[str]:
-    """Same object on several douyinstatic hosts; cloud IPs often need a mirror."""
+    """Same object on several douyinstatic hosts; skip hosts that do not resolve."""
+    # Only well-known sf*-cdn-tos hosts. Fake v95-music etc. break cloud DNS.
     hosts = (
         "sf3-cdn-tos.douyinstatic.com",
         "sf6-cdn-tos.douyinstatic.com",
-        "sf5-cdn-tos.douyinstatic.com",
         "sf1-cdn-tos.douyinstatic.com",
-        "v3-music.douyinstatic.com",
-        "v95-music.douyinstatic.com",
     )
+    live_hosts = [h for h in hosts if _host_resolves(h)]
     out: List[str] = []
     for raw in urls:
-        if raw not in out:
-            out.append(raw)
         try:
             parsed = urllib.parse.urlparse(raw)
+            host = (parsed.hostname or "").lower()
             path = parsed.path or ""
         except Exception:
             continue
+        if host and not _host_resolves(host):
+            logger.warning("skip unresolvable douyin host: %s", host)
+            continue
+        if raw not in out:
+            out.append(raw)
         if "/obj/ies-music/" not in path and "/ies-music/" not in path:
             continue
-        for host in hosts:
+        for host in live_hosts:
             alt = urllib.parse.urlunparse(
                 ("https", host, path, "", parsed.query or "", "")
             )
@@ -254,14 +299,16 @@ def _music_urls_from_aweme(item: Dict[str, Any]) -> List[str]:
 
 
 def _muxed_play_urls_from_uri(uri: Optional[str]) -> List[str]:
-    """iesdouyin /play/ usually returns a muxed mp4 with audio (may carry watermark)."""
+    """Watermarked playwm often keeps audio on cloud IPs; try it before no-WM play."""
     if not uri:
         return []
-    return [
-        "https://www.iesdouyin.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
+    urls = [
+        "https://aweme.snssdk.com/aweme/v1/playwm/?video_id={}&ratio=720p&line=0".format(uri),
         "https://aweme.snssdk.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
         "https://www.iesdouyin.com/aweme/v1/playwm/?video_id={}&ratio=720p&line=0".format(uri),
+        "https://www.iesdouyin.com/aweme/v1/play/?video_id={}&ratio=720p&line=0".format(uri),
     ]
+    return [u for u in urls if _host_resolves(urllib.parse.urlparse(u).hostname or "")]
 
 
 def _video_uri(video: Dict[str, Any]) -> Optional[str]:
@@ -581,13 +628,18 @@ def _download_urls_to_file(
     for play in urls:
         try:
             total = 0
+            fetch_url, host_hdr = _ipv4_fetch_url(play)
+            req_headers = dict(headers)
+            req_headers.update(host_hdr)
             if cffi_requests is not None:
+                # verify=False when using IPv4 literal + Host (SNI/cert name mismatch).
                 resp = cffi_requests.get(
-                    play,
+                    fetch_url,
                     impersonate="chrome131",
-                    headers=headers,
+                    headers=req_headers,
                     timeout=60,
                     allow_redirects=True,
+                    verify=fetch_url == play,
                 )
                 if resp.status_code >= 400:
                     raise DouyinError("下载失败：HTTP {}".format(resp.status_code))
@@ -603,7 +655,7 @@ def _download_urls_to_file(
                     raise DouyinError("CDN 返回了网页而不是媒体")
                 out_path.write_bytes(data)
             else:
-                req = urllib.request.Request(play, headers=headers)
+                req = urllib.request.Request(fetch_url, headers=req_headers)
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     with open(out_path, "wb") as f:
                         while True:
@@ -675,14 +727,20 @@ def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
 
     candidates: List[Tuple[str, List[str]]] = []
+    # 1) Official music CDN (resolvable hosts only).
     audio_urls = _expand_music_cdn(list(info.get("_douyin_audio_urls") or []))
     if audio_urls:
-        # Keep .mp3 when the CDN path says so — ffmpeg accepts either.
         ext = "mp3" if any(".mp3" in u.lower() for u in audio_urls) else "m4a"
         candidates.append((ext, audio_urls))
+    # 2) Watermarked / muxed play (snssdk) — often the only with-audio option on VPS.
     play_map = info.get("_douyin_play_map") or {}
     play_urls = list(play_map.get("douyin-play") or []) or list(
         info.get("_douyin_play_urls") or []
+    )
+    # Prefer playwm URLs first for ASR.
+    play_urls = sorted(
+        play_urls,
+        key=lambda u: (0 if "playwm" in u else 1, 0 if "snssdk.com" in u else 1),
     )
     if play_urls:
         candidates.append(("mp4", play_urls))
