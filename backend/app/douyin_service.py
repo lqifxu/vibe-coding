@@ -223,25 +223,6 @@ def _host_resolves(host: str) -> bool:
             return False
 
 
-def _ipv4_fetch_url(url: str) -> Tuple[str, Dict[str, str]]:
-    """Rewrite URL host to IPv4 literal and return extra Host header."""
-    parsed = urllib.parse.urlparse(url)
-    host = parsed.hostname or ""
-    extra: Dict[str, str] = {}
-    if not host:
-        return url, extra
-    try:
-        infos = socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)
-        ip = infos[0][4][0]
-    except OSError:
-        return url, extra
-    netloc = ip
-    if parsed.port:
-        netloc = "{}:{}".format(ip, parsed.port)
-    extra["Host"] = host
-    return urllib.parse.urlunparse(parsed._replace(netloc=netloc)), extra
-
-
 def _expand_music_cdn(urls: List[str]) -> List[str]:
     """Same object on several douyinstatic hosts; skip hosts that do not resolve."""
     # Only well-known sf*-cdn-tos hosts. Fake v95-music etc. break cloud DNS.
@@ -628,18 +609,17 @@ def _download_urls_to_file(
     for play in urls:
         try:
             total = 0
-            fetch_url, host_hdr = _ipv4_fetch_url(play)
-            req_headers = dict(headers)
-            req_headers.update(host_hdr)
             if cffi_requests is not None:
-                # verify=False when using IPv4 literal + Host (SNI/cert name mismatch).
+                from curl_cffi import CurlOpt
+
+                # Keep real hostname for TLS/SNI; force IPv4 (Tencent VPS IPv6 often broken).
                 resp = cffi_requests.get(
-                    fetch_url,
+                    play,
                     impersonate="chrome131",
-                    headers=req_headers,
+                    headers=headers,
                     timeout=60,
                     allow_redirects=True,
-                    verify=fetch_url == play,
+                    curl_options={CurlOpt.IPRESOLVE: 1},
                 )
                 if resp.status_code >= 400:
                     raise DouyinError("下载失败：HTTP {}".format(resp.status_code))
@@ -655,7 +635,7 @@ def _download_urls_to_file(
                     raise DouyinError("CDN 返回了网页而不是媒体")
                 out_path.write_bytes(data)
             else:
-                req = urllib.request.Request(fetch_url, headers=req_headers)
+                req = urllib.request.Request(play, headers=headers)
                 with urllib.request.urlopen(req, timeout=60) as resp:
                     with open(out_path, "wb") as f:
                         while True:

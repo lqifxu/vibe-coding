@@ -355,12 +355,19 @@ def _download_xhs_urls(
     last_err = None
     for play in urls:
         try:
+            try:
+                from curl_cffi import CurlOpt
+
+                curl_options = {CurlOpt.IPRESOLVE: 1}
+            except Exception:
+                curl_options = None
             resp = session.get(
                 play,
                 timeout=60,
                 allow_redirects=True,
                 headers={"Referer": "https://www.xiaohongshu.com/"},
                 stream=True,
+                **({"curl_options": curl_options} if curl_options else {}),
             )
             if resp.status_code != 200:
                 raise XiaohongshuError("下载失败：HTTP {}".format(resp.status_code))
