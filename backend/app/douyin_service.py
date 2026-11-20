@@ -200,6 +200,36 @@ def _as_int(value: Any) -> int:
         return 0
 
 
+def _expand_music_cdn(urls: List[str]) -> List[str]:
+    """Same object on several douyinstatic hosts; cloud IPs often need a mirror."""
+    hosts = (
+        "sf3-cdn-tos.douyinstatic.com",
+        "sf6-cdn-tos.douyinstatic.com",
+        "sf5-cdn-tos.douyinstatic.com",
+        "sf1-cdn-tos.douyinstatic.com",
+        "v3-music.douyinstatic.com",
+        "v95-music.douyinstatic.com",
+    )
+    out: List[str] = []
+    for raw in urls:
+        if raw not in out:
+            out.append(raw)
+        try:
+            parsed = urllib.parse.urlparse(raw)
+            path = parsed.path or ""
+        except Exception:
+            continue
+        if "/obj/ies-music/" not in path and "/ies-music/" not in path:
+            continue
+        for host in hosts:
+            alt = urllib.parse.urlunparse(
+                ("https", host, path, "", parsed.query or "", "")
+            )
+            if alt not in out:
+                out.append(alt)
+    return out
+
+
 def _music_urls_from_aweme(item: Dict[str, Any]) -> List[str]:
     """Douyin bit_rate play_addr is often video-only; music.play_url has the audio."""
     music = item.get("music") if isinstance(item.get("music"), dict) else {}
@@ -208,7 +238,19 @@ def _music_urls_from_aweme(item: Dict[str, Any]) -> List[str]:
         for u in _url_list(music.get(key)):
             if u not in urls:
                 urls.append(u)
-    return urls
+    # Some payloads only expose music id / uri — synthesize CDN paths.
+    mid = str(music.get("id") or music.get("id_str") or "").strip()
+    for key in ("play_url", "play_url_lowbr"):
+        addr = music.get(key)
+        if isinstance(addr, dict):
+            uri = str(addr.get("uri") or "").strip()
+            if uri and not uri.startswith("http") and uri not in mid:
+                mid = mid or uri
+    if mid and mid.isdigit():
+        synth = "https://sf3-cdn-tos.douyinstatic.com/obj/ies-music/{}.mp3".format(mid)
+        if synth not in urls:
+            urls.append(synth)
+    return _expand_music_cdn(urls)
 
 
 def _muxed_play_urls_from_uri(uri: Optional[str]) -> List[str]:
@@ -522,33 +564,69 @@ def _download_urls_to_file(
     out_path: Path,
     min_bytes: int = 1000,
 ) -> Path:
+    """Prefer curl_cffi (Chrome TLS) — cloud urllib often gets empty/blocked CDN bodies."""
     last_err = None
+    headers = {
+        "User-Agent": _FEED_UA,
+        "Referer": "https://www.douyin.com/",
+        "Origin": "https://www.douyin.com",
+        "Accept": "*/*",
+    }
+
+    try:
+        from curl_cffi import requests as cffi_requests
+    except ImportError:
+        cffi_requests = None
+
     for play in urls:
         try:
-            req = urllib.request.Request(
-                play,
-                headers={
-                    "User-Agent": _UA,
-                    "Referer": "https://www.douyin.com/",
-                },
-            )
-            with urllib.request.urlopen(req, timeout=60) as resp:
-                total = 0
-                with open(out_path, "wb") as f:
-                    while True:
-                        chunk = resp.read(1024 * 256)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > MAX_DOWNLOAD_BYTES:
-                            raise DouyinError("文件超过体积上限（500MB）", status_code=413)
-                        f.write(chunk)
+            total = 0
+            if cffi_requests is not None:
+                resp = cffi_requests.get(
+                    play,
+                    impersonate="chrome131",
+                    headers=headers,
+                    timeout=60,
+                    allow_redirects=True,
+                )
+                if resp.status_code >= 400:
+                    raise DouyinError("下载失败：HTTP {}".format(resp.status_code))
+                data = resp.content or b""
+                total = len(data)
+                if total > MAX_DOWNLOAD_BYTES:
+                    raise DouyinError("文件超过体积上限（500MB）", status_code=413)
                 if total < min_bytes:
                     raise DouyinError("下载内容过小，可能不是媒体文件")
-                logger.info("douyin downloaded %s bytes from %s", total, play[:80])
-                return out_path
-        except DouyinError:
-            raise
+                # HTML login / error pages are not media
+                head = data[:200].lstrip().lower()
+                if head.startswith(b"<!DOCTYPE") or head.startswith(b"<html"):
+                    raise DouyinError("CDN 返回了网页而不是媒体")
+                out_path.write_bytes(data)
+            else:
+                req = urllib.request.Request(play, headers=headers)
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    with open(out_path, "wb") as f:
+                        while True:
+                            chunk = resp.read(1024 * 256)
+                            if not chunk:
+                                break
+                            total += len(chunk)
+                            if total > MAX_DOWNLOAD_BYTES:
+                                raise DouyinError("文件超过体积上限（500MB）", status_code=413)
+                            f.write(chunk)
+                if total < min_bytes:
+                    raise DouyinError("下载内容过小，可能不是媒体文件")
+            logger.info("douyin downloaded %s bytes from %s", total, play[:80])
+            return out_path
+        except DouyinError as exc:
+            last_err = exc
+            logger.warning("douyin media url failed: %s (%s)", play[:80], exc)
+            if out_path.exists():
+                try:
+                    out_path.unlink()
+                except OSError:
+                    pass
+            continue
         except Exception as exc:
             last_err = exc
             logger.warning("douyin media url failed: %s (%s)", play[:80], exc)
@@ -597,9 +675,11 @@ def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
 
     candidates: List[Tuple[str, List[str]]] = []
-    audio_urls = list(info.get("_douyin_audio_urls") or [])
+    audio_urls = _expand_music_cdn(list(info.get("_douyin_audio_urls") or []))
     if audio_urls:
-        candidates.append(("m4a", audio_urls))
+        # Keep .mp3 when the CDN path says so — ffmpeg accepts either.
+        ext = "mp3" if any(".mp3" in u.lower() for u in audio_urls) else "m4a"
+        candidates.append((ext, audio_urls))
     play_map = info.get("_douyin_play_map") or {}
     play_urls = list(play_map.get("douyin-play") or []) or list(
         info.get("_douyin_play_urls") or []
@@ -611,7 +691,8 @@ def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
     for ext, urls in candidates:
         # Try URLs one-by-one so a silent CDN file does not block a later good URL.
         for play in urls:
-            out_path = job_dir / "{} [{}].{}".format(safe_title, info["id"], ext)
+            use_ext = "mp3" if ".mp3" in play.lower() else ext
+            out_path = job_dir / "{} [{}].{}".format(safe_title, info["id"], use_ext)
             try:
                 path = _download_urls_to_file([play], out_path, min_bytes=500)
                 if media_has_audio(path):
