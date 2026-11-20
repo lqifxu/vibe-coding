@@ -697,27 +697,66 @@ def download_douyin(
         raise
 
 
+def _usable_for_asr(path: Path) -> bool:
+    """Accept file if it has an audio stream (ffprobe) or ffmpeg can extract audio."""
+    from .asr_service import extract_audio, media_has_audio
+
+    if media_has_audio(path):
+        return True
+    probe_dir = path.parent / ("_asr_probe_" + uuid.uuid4().hex[:8])
+    probe_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        extract_audio(path, probe_dir)
+        return True
+    except Exception:
+        return False
+    finally:
+        remove_dir(probe_dir)
+
+
 def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
-    """Prefer music audio / muxed play for speech-to-text (bit_rate CDN is often silent)."""
-    from .asr_service import media_has_audio
+    """Use the same bit_rate download as /api/download first — that path already works on VPS.
+
+    Music CDN often 404s from cloud IPs; muxed play/playwm may be silent. The UI download
+    format (bit_rate) frequently still carries audio.
+    """
+    last_err: Optional[BaseException] = None
+
+    # 1) Same download path as the website「下载」button.
+    try:
+        path = download_douyin(url, dest_dir=dest_dir)
+        if _usable_for_asr(path):
+            return path
+        logger.warning("douyin bit_rate file not usable for ASR, try music/muxed")
+        job_dir = path.parent
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    except DouyinError as exc:
+        last_err = exc
+        job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
+        job_dir.mkdir(parents=True, exist_ok=True)
 
     info = fetch_douyin_info(url)
-    job_dir = dest_dir or (TEMP_DIR / str(uuid.uuid4()))
-    job_dir.mkdir(parents=True, exist_ok=True)
     safe_title = re.sub(r'[\\/:*?"<>|]+', "_", info["title"])[:60] or info["id"]
 
     candidates: List[Tuple[str, List[str]]] = []
-    # 1) Official music CDN (resolvable hosts only).
     audio_urls = _expand_music_cdn(list(info.get("_douyin_audio_urls") or []))
     if audio_urls:
         ext = "mp3" if any(".mp3" in u.lower() for u in audio_urls) else "m4a"
         candidates.append((ext, audio_urls))
-    # 2) Watermarked / muxed play (snssdk) — often the only with-audio option on VPS.
+
     play_map = info.get("_douyin_play_map") or {}
+    # Prefer each quality's raw CDN list (bit_rate), then douyin-play muxed.
+    for fid, urls in play_map.items():
+        if fid == "douyin-play":
+            continue
+        if urls:
+            candidates.append(("mp4", list(urls)))
     play_urls = list(play_map.get("douyin-play") or []) or list(
         info.get("_douyin_play_urls") or []
     )
-    # Prefer playwm URLs first for ASR.
     play_urls = sorted(
         play_urls,
         key=lambda u: (0 if "playwm" in u else 1, 0 if "snssdk.com" in u else 1),
@@ -725,15 +764,13 @@ def download_douyin_for_asr(url: str, dest_dir: Optional[Path] = None) -> Path:
     if play_urls:
         candidates.append(("mp4", play_urls))
 
-    last_err: Optional[BaseException] = None
     for ext, urls in candidates:
-        # Try URLs one-by-one so a silent CDN file does not block a later good URL.
         for play in urls:
             use_ext = "mp3" if ".mp3" in play.lower() else ext
             out_path = job_dir / "{} [{}].{}".format(safe_title, info["id"], use_ext)
             try:
                 path = _download_urls_to_file([play], out_path, min_bytes=500)
-                if media_has_audio(path):
+                if _usable_for_asr(path):
                     return path
                 logger.warning("douyin ASR candidate has no audio: %s", play[:80])
                 try:
